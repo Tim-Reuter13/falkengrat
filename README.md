@@ -1,14 +1,16 @@
 # Falkengrat
 
-Ein First-Person-Bergwald in Three.js r180. Ein Gebirgsbach schlängelt sich zwischen Kiesbänken und Felsblöcken durch das Tal. Du kannst durch seine Furten waten und dem Waldpfad bis zum Aussichtspunkt folgen. Das Spiel benötigt einen Desktop-Browser mit WebGL 2. Die fertige HTML-Datei enthält Code, Engine und Texturen und lässt sich offline öffnen.
+Ein First-Person-Bergwald in Three.js r180. Ein Gebirgsbach schlängelt sich zwischen Kiesbänken und Felsblöcken durch das Tal. Du kannst durch seine Furten waten und dem Waldpfad bis zum Aussichtspunkt folgen. Das Spiel benötigt einen Browser mit WebGL 2. Die fertige HTML-Datei enthält Code, Engine und Texturen und lässt sich offline öffnen.
 
 ## Steuerung
+
+Am Handy spielst du hochkant. Mit dem Joystick links unten läufst du, rechts wischst du zum Umsehen. Ein kurzer Tipp rechts schwingt das Schwert. Tippe auf den Zielhinweis oben, um zu pausieren.
 
 WASD oder Pfeiltasten zum Laufen, Maus zum Umsehen, Shift zum Sprinten und Leertaste zum Springen. Linksklick schwingt das Schwert, Rechtsklick pariert. Der Stumpf an der ersten Wegmarke dient als Übungsziel. Falls der Browser die Maus nicht einfängt, ziehe mit gedrückter linker Maustaste, um dich umzusehen.
 
 Mit P wechselst du in den Fotomodus, mit M schaltest du den Ton um und mit Esc pausierst du. **Ruhige Kamera** deaktiviert das Wippen und die Bewegungsunschärfe. Die Tasten 1 bis 3 wechseln zwischen den Grafikprofilen. N wechselt zwischen Tag und Nacht. Die Tageszeit lässt sich auch im Menü unter **Grafik & Ton** einstellen. F3 zeigt Bildrate, Renderauflösung, Draw Calls und Dreiecke.
 
-**Im Browser spielen:** https://tim-reuter13.github.io/falkengrat/ (Desktop-Browser mit WebGL 2, die Seite ist etwa 33 MB groß)
+**Im Browser spielen:** https://tim-reuter13.github.io/falkengrat/ (WebGL 2, die Seite ist etwa 33 MB groß)
 
 ## Aus dem Quellcode bauen
 

@@ -7,6 +7,7 @@ export function createPlayer(camera, collision, audio) {
   const euler = new T.Euler(0,0,0,'YXZ');
   let yaw=0,pitch=0,bob=0,step=0,vY=0,eyeY=0,grounded=true;
   let lookX=0,lookY=0,stride=0,jumpPending=false,eyeVelocity=0,landing=0;
+  let touchHorizontal=0,touchVertical=0;
   let bobStrength=1;
   const eyeHeight=1.69;
   const place = (x,z,heading,tilt) => {
@@ -31,9 +32,10 @@ export function createPlayer(camera, collision, audio) {
     enterTrail(){place(9,1.2,-.15,-.055);},
     motion(amount){bobStrength=amount;},
     jump(){jumpPending=true;},
-    look(dx,dy) {
-      yaw-=clamp(dx,-90,90)*.0022;
-      pitch=clamp(pitch-clamp(dy,-90,90)*.0022,-1.47,1.47);
+    steer(horizontal,vertical){touchHorizontal=horizontal;touchVertical=vertical;},
+    look(dx,dy,sensitivity=1) {
+      yaw-=clamp(dx,-90,90)*.0022*sensitivity;
+      pitch=clamp(pitch-clamp(dy,-90,90)*.0022*sensitivity,-1.47,1.47);
       lookX=clamp(lookX+dx*.0023,-.31,.31);
       lookY=clamp(lookY+dy*.0023,-.26,.26);
     },
@@ -44,8 +46,9 @@ export function createPlayer(camera, collision, audio) {
       const right=keys.has('KeyD')||keys.has('ArrowRight');
       const front=keys.has('KeyW')||keys.has('ArrowUp');
       const back=keys.has('KeyS')||keys.has('ArrowDown');
-      const horizontal=Number(right)-Number(left), vertical=Number(front)-Number(back);
-      const sprint=moving&&run&&vertical===1;
+      const horizontal=clamp(Number(right)-Number(left)+touchHorizontal,-1,1);
+      const vertical=clamp(Number(front)-Number(back)+touchVertical,-1,1);
+      const sprint=moving&&run&&front&&!back&&vertical===1;
       direction.set(horizontal*.81,0,-vertical*(vertical<0?.70:1));
       if(direction.lengthSq()>1)direction.normalize();
       if(!moving)direction.set(0,0,0);
