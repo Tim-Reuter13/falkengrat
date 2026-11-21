@@ -1,0 +1,123 @@
+<!doctype html>
+<html lang="de">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="color-scheme" content="dark">
+  <meta name="description" content="Erkunde den Falkengrat, einen First-Person-Bergwald in Three.js.">
+  <title>Falkengrat</title>
+  <style>/* GAME_STYLES */</style>
+</head>
+<body>
+  <canvas id="game" tabindex="-1" aria-label="Falkengrat Spielansicht"></canvas>
+  <div class="fg-poster" aria-hidden="true"></div>
+  <div id="fg-display-tone" aria-hidden="true"></div>
+  <div id="fg-screen-texture" aria-hidden="true"></div>
+  <div class="menu fg-menu" id="menu">
+    <main class="start fg-start">
+      <div class="fg-crest" aria-hidden="true"><i></i><i></i><i></i></div>
+      <h1>Falkengrat</h1>
+      <p id="subtitle" class="subtitle" aria-live="polite">Wald und Licht werden geladen.</p>
+      <div class="fg-actions">
+        <button id="play" class="play" disabled><span>Wird geladen</span><i aria-hidden="true"></i></button>
+        <button type="button" class="fg-options" id="fg-options" aria-controls="fg-settings" aria-expanded="true">
+          <i class="fg-options-icon" aria-hidden="true"></i>Einstellungen
+        </button>
+      </div>
+    </main>
+
+    <section class="fg-panel" id="fg-settings" aria-labelledby="fg-settings-label">
+      <header class="fg-panel-head">
+        <div class="fg-panel-title"><i class="fg-screen-icon" aria-hidden="true"></i><h2 id="fg-settings-label">Einstellungen</h2></div>
+        <button type="button" id="fg-close" class="fg-close" aria-label="Einstellungen schließen">×</button>
+      </header>
+      <div class="fg-tabs" role="tablist" aria-label="Einstellungen">
+        <button id="fg-tab-display" type="button" role="tab" aria-selected="true" aria-controls="fg-display">Bildschirm</button>
+        <button id="fg-tab-game" type="button" role="tab" aria-selected="false" aria-controls="fg-game" tabindex="-1">Grafik &amp; Ton</button>
+        <button id="fg-tab-controls" type="button" role="tab" aria-selected="false" aria-controls="fg-controls" tabindex="-1">Steuerung</button>
+      </div>
+
+      <div role="tabpanel" class="fg-content" id="fg-display" aria-labelledby="fg-tab-display">
+        <fieldset class="fg-profiles">
+          <legend>Bildschirmprofil</legend>
+          <div class="fg-profile-grid">
+            <label><input type="radio" name="fg-display-profile" value="neutral" checked><span><b>Neutral</b><small>Originalbild</small></span></label>
+            <label><input type="radio" name="fg-display-profile" value="lcd"><span><b>LCD-TV</b><small>Wärmeres TV-Bild</small></span></label>
+            <label><input type="radio" name="fg-display-profile" value="ips"><span><b>IPS</b><small>Kühle Farbbalance</small></span></label>
+            <label><input type="radio" name="fg-display-profile" value="va"><span><b>VA-LCD</b><small>Tiefe Mitteltöne</small></span></label>
+            <label><input type="radio" name="fg-display-profile" value="oled"><span><b>OLED</b><small>Klarer Kontrast</small></span></label>
+            <label><input type="radio" name="fg-display-profile" value="crt"><span><b>Röhren-TV</b><small>Feine Scanlines</small></span></label>
+          </div>
+        </fieldset>
+        <div class="fg-sliders">
+          <label for="fg-strength"><span>Filterstärke <output for="fg-strength" id="fg-strength-value">100 %</output></span><input id="fg-strength" data-fg-key="strength" type="range" min="0" max="100" step="1" value="100"></label>
+          <label for="fg-brightness"><span>Helligkeit <output for="fg-brightness" id="fg-brightness-value">0</output></span><input id="fg-brightness" data-fg-key="brightness" type="range" min="-22" max="22" step="1" value="0"></label>
+          <label for="fg-contrast"><span>Kontrast <output for="fg-contrast" id="fg-contrast-value">0</output></span><input id="fg-contrast" data-fg-key="contrast" type="range" min="-24" max="24" step="1" value="0"></label>
+          <label for="fg-temp"><span>Farbtemperatur <output for="fg-temp" id="fg-temp-value">0</output></span><input id="fg-temp" data-fg-key="temperature" type="range" min="-20" max="20" step="1" value="0"></label>
+        </div>
+        <footer class="fg-panel-foot">
+          <button type="button" class="fg-compare" id="fg-compare" aria-pressed="false"><i aria-hidden="true"></i>Original vergleichen</button>
+          <button type="button" class="fg-reset" id="fg-reset">Zurücksetzen</button>
+        </footer>
+      </div>
+
+      <div role="tabpanel" class="fg-content" id="fg-game" aria-labelledby="fg-tab-game" hidden>
+        <div class="settings fg-game-settings">
+          <div class="fg-setting">
+            <label for="quality">Grafikprofil</label>
+            <select id="quality">
+              <option value="speed">Performance</option>
+              <option value="balanced" selected>Ausgewogen</option>
+              <option value="high">Cinematic</option>
+            </select>
+          </div>
+          <div class="fg-setting">
+            <label for="timeofday">Tageszeit</label>
+            <select id="timeofday">
+              <option value="day" selected>Tag</option>
+              <option value="night">Nacht</option>
+            </select>
+          </div>
+          <div class="fg-setting">
+            <span>Spielton</span>
+            <button type="button" id="sound" class="sound" aria-pressed="true">Ton an</button>
+          </div>
+          <div class="fg-setting">
+            <label for="calm">Ruhige Kamera</label>
+            <label class="fg-toggle"><input type="checkbox" id="calm"><span aria-hidden="true"></span></label>
+          </div>
+        </div>
+      </div>
+
+      <div role="tabpanel" class="fg-content" id="fg-controls" aria-labelledby="fg-tab-controls" hidden>
+        <dl class="fg-controls">
+          <div><dt>Laufen</dt><dd><kbd>W A S D</kbd></dd></div>
+          <div><dt>Umsehen</dt><dd><kbd>Maus</kbd></dd></div>
+          <div><dt>Schlagen</dt><dd><kbd>Linksklick</kbd></dd></div>
+          <div><dt>Parieren</dt><dd><kbd>Rechtsklick</kbd></dd></div>
+          <div><dt>Sprinten</dt><dd><kbd>Shift</kbd></dd></div>
+          <div><dt>Springen</dt><dd><kbd>Leertaste</kbd></dd></div>
+          <div><dt>Fotomodus</dt><dd><kbd>P</kbd></dd></div>
+          <div><dt>Pause</dt><dd><kbd>Esc</kbd></dd></div>
+        </dl>
+      </div>
+    </section>
+
+    <footer class="fg-dock" aria-label="Wichtige Tasten">
+      <span><kbd>W A S D</kbd>Laufen</span>
+      <span><kbd>Maus</kbd>Umsehen</span>
+      <span><kbd>P</kbd>Fotomodus</span>
+      <span><kbd>Esc</kbd>Pause</span>
+    </footer>
+  </div>
+  <div class="hud" aria-hidden="true">
+    <div class="guide"><i id="guide"></i><span id="objective"></span></div>
+    <div class="reticle"></div>
+  </div>
+  <div id="toast" role="status"></div>
+  <div id="metrics" hidden aria-label="Grafikstatistik"></div>
+  <noscript>Aktiviere JavaScript, um Falkengrat zu spielen.</noscript>
+  <script>/* GAME_CODE */</script>
+  <script>/* MENU_CODE */</script>
+</body>
+</html>
