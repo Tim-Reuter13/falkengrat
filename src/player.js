@@ -143,6 +143,8 @@ export function createSound() {
     }
   }
   return {
+    get context(){return ctx;},
+    get output(){return master;},
     start() {
       if(!ctx) {
         const Audio=window.AudioContext||window.webkitAudioContext;

@@ -10,7 +10,9 @@ WASD oder Pfeiltasten zum Laufen, Maus zum Umsehen, Shift zum Sprinten und Leert
 
 Mit P wechselst du in den Fotomodus, mit M schaltest du den Ton um und mit Esc pausierst du. **Ruhige Kamera** deaktiviert das Wippen und die Bewegungsunschärfe. Die Tasten 1 bis 3 wechseln zwischen den Grafikprofilen. N wechselt zwischen Tag und Nacht. Die Tageszeit lässt sich auch im Menü unter **Grafik & Ton** einstellen. F3 zeigt Bildrate, Renderauflösung, Draw Calls und Dreiecke.
 
-**Im Browser spielen:** https://tim-reuter13.github.io/falkengrat/ (WebGL 2, die Seite ist etwa 33 MB groß)
+Bei Nacht bewegt sich der Kannibale durch die Baumkronen. Im Menü unter **Grafik & Ton** kannst du die Nacht direkt auswählen.
+
+**Im Browser spielen:** https://tim-reuter13.github.io/falkengrat/ (WebGL 2, die Seite ist etwa 44 MB groß)
 
 ## Aus dem Quellcode bauen
 

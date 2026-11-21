@@ -18,6 +18,7 @@ import { createTouchControls } from './touch-controls.js';
 import { makeCollision } from './collision.js';
 import { createSword } from './sword.js';
 import { createAirEffects } from './vfx.js';
+import { createCannibal } from './cannibal.js';
 
 const $ = id => document.getElementById(id);
 const canvas=$('game'), play=$('play'), menu=$('menu'), subtitle=$('subtitle');
@@ -41,7 +42,8 @@ async function loadTextures(renderer) {
   const loader = new T.TextureLoader();
   const mask = new Set(['fir','spruce','fern','sprig','alps','foothills','props','habitat','atlasFir','atlasSpruce','endgrain','endgrainNormal']);
   const data = new Set(['groundNormal','rockNormal','barkNormal','atlasFir','atlasSpruce','meadowNormal','limestoneNormal','endgrainNormal','soilNormals','foam']);
-  const records=await Promise.all(Object.entries(assetUrls).filter(([key])=>key!=='hand'&&key!=='sword').map(async ([key,url])=>{
+  const models3d=new Set(['hand','sword','cannibal','boneDagger']);
+  const records=await Promise.all(Object.entries(assetUrls).filter(([key])=>!models3d.has(key)&&!key.startsWith('sfx/')).map(async ([key,url])=>{
     const tex=await loader.loadAsync(url);
     tex.colorSpace=data.has(key) ? T.NoColorSpace : T.SRGBColorSpace;
     tex.anisotropy=Math.min(8,renderer.capabilities.getMaxAnisotropy());
@@ -121,7 +123,8 @@ async function game() {
   const camera=new T.PerspectiveCamera(63,1,.075,3400);
   scene.add(camera);
   const models=new GLTFLoader();
-  const [textures,hand,blade]=await Promise.all([loadTextures(renderer),models.loadAsync(assetUrls.hand),models.loadAsync(assetUrls.sword)]);
+  const [textures,hand,blade,cannibalModel,daggerModel]=await Promise.all([loadTextures(renderer),models.loadAsync(assetUrls.hand),models.loadAsync(assetUrls.sword),
+    models.loadAsync(assetUrls.cannibal),models.loadAsync(assetUrls.boneDagger)]);
   const collision=makeCollision(),audio=createSound();
   const player=createPlayer(camera,collision,audio);
   const clock={value:0};
@@ -157,6 +160,9 @@ async function game() {
   buildTrailMarker(scene,'Falkengrat',pathX(-24)-2.75,-24,textures.bark);
   buildTrailMarker(scene,'Aussicht',overlook.x+2.75,overlook.z-1.8,textures.bark);
   const birds=createBirds(scene,textures,perches,collision,audio);
+  const sfx=Object.fromEntries(Object.entries(assetUrls).filter(([key])=>key.startsWith('sfx/')).map(([key,url])=>[key.slice(4),url]));
+  const cannibal=createCannibal({scene,camera,collision,audio,trees:forest.trees,model:cannibalModel,dagger:daggerModel,sounds:sfx,
+    isNight:()=>dayNight.night,onCatch:()=>caught()});
 
   let toastTime=0;
   function toast(text,seconds=2.3) {
@@ -170,7 +176,7 @@ async function game() {
       practiceHit=true;
       toast('Übungstreffer');
     }
-  },{hand:hand.scene,sword:blade.scene},probe);
+  },{hand:hand.scene,sword:blade.scene},probe,[cannibal]);
   const calm=$('calm');
   const savedMotion=preference('falkengrat-calm');
   calm.checked=savedMotion===null?matchMedia('(prefers-reduced-motion: reduce)').matches:savedMotion==='true';
@@ -236,6 +242,26 @@ async function game() {
     subtitle.textContent='Dein Standort bleibt erhalten.';
     play.focus({preventScroll:true});
   }
+  const death=$('death');
+  let dead=false;
+  function caught(){
+    dead=true;active=false;
+    touch.reset();
+    sword.block(false);player.keys.clear();
+    document.body.classList.remove('playing');
+    document.body.classList.add('dead');
+    if(document.pointerLockElement===canvas)document.exitPointerLock();
+    death.hidden=false;
+    $('death-again').focus({preventScroll:true});
+  }
+  function revive(){
+    dead=false;death.hidden=true;
+    document.body.classList.remove('dead');
+    cannibal.reset();
+    player.enterTrail();
+    launch();
+  }
+  $('death-again').addEventListener('click',revive);
   let lockEnabled=true,firstEntry=true;
   function launch() {
     if(touch.enabled&&!touch.portrait.matches)return;
@@ -301,6 +327,7 @@ async function game() {
     if(event.code==='KeyP'&&!event.repeat){setPhoto(!photo);return;}
     if(event.code==='KeyM'&&!event.repeat){toggleSound();toast(muted?'Ton aus':'Ton an');return;}
     if(event.code==='KeyN'&&!event.repeat){setNight(!dayNight.night);toast(dayNight.night?'Nacht':'Tag');return;}
+    if(event.code==='KeyE'&&!event.repeat){if(cannibal.take(player.ground))toast('Knochendolch aufgehoben',3);return;}
     if(['Digit1','Digit2','Digit3'].includes(event.code)&&!event.repeat){
       changeQuality(['speed','balanced','high'][Number(event.code.slice(-1))-1]);
       toast(quality.name);return;
@@ -357,6 +384,10 @@ async function game() {
         ...animalTraces,driftingLeaves:streamLife.leaves,midgeGroups:streamLife.midgeGroups}),
       atlas:()=>exportTreeAtlas(renderer,forest.targets),
       place:(x,z,heading,tilt)=>player.place(x,z,heading,tilt),
+      night:value=>setNight(value,true),
+      cannibal:{state:cannibal.state,...Object.fromEntries(Object.entries(cannibal.debug).map(([k,f])=>[k,(...a)=>f(...a,player.ground)]))},
+      look:(heading,tilt)=>player.place(player.ground.x,player.ground.z,heading,tilt),
+      camera,cannibalModel:cannibal.root,
     };
   }
 
@@ -371,8 +402,12 @@ async function game() {
     if(toastTime>0&&(toastTime-=dt)<=0)prompt.classList.remove('shown');
     const steps=Math.max(1,Math.ceil(dt/.035));
     let movement;
-    for(let i=0;i<steps;i++)movement=player.update(dt/steps,active);
+    for(let i=0;i<steps;i++)movement=player.update(dt/steps,active&&!cannibal.catching);
     clock.value=elapsed;
+    cannibal.update(dt,player.ground,active);
+    cannibal.frame(dt);
+    if(cannibal.catching&&sword.visible)sword.show(false);
+    if(active&&frameCount%15===3&&cannibal.canTake&&Math.hypot(cannibal.knife.position.x-player.ground.x,cannibal.knife.position.z-player.ground.z)<2)toast('E · Knochendolch aufheben',.6);
     sword.update(dt,elapsed,movement);
     const distance=Math.hypot(player.ground.x-overlook.x,player.ground.z-overlook.z);
     if(active&&distance<4.6&&!reached){
