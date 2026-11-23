@@ -15,6 +15,7 @@ export function createCannibal({ scene, camera, collision, audio, trees, model, 
   // ---------- model and animation
   const root = new T.Group();
   const body = model.scene;
+  const closeupFill = { value: 0 };
   root.add(body);
   root.visible = false;
   scene.add(root);
@@ -22,7 +23,29 @@ export function createCannibal({ scene, camera, collision, audio, trees, model, 
     if (!o.isMesh) return;
     o.castShadow = true; o.receiveShadow = true; o.frustumCulled = false;
     const m = o.material;
-    if (m) { m.roughness = Math.max(m.roughness ?? 1, .78); m.metalness = 0; m.envMapIntensity = .4; }
+    if (!m) return;
+    m.roughness = Math.max(m.roughness ?? 1, .78);
+    m.metalness = 0;
+    m.envMapIntensity = .4;
+    // Soft fill for the close-up, calculated on the actor so the forest stays dark.
+    m.onBeforeCompile = shader => {
+      shader.uniforms.closeupFill = closeupFill;
+      shader.vertexShader = 'varying float vActorBaseHeight;\n' + shader.vertexShader.replace(
+        '#include <begin_vertex>',
+        '#include <begin_vertex>\nvActorBaseHeight = position.y;'
+      );
+      shader.fragmentShader = 'uniform float closeupFill;\nvarying float vActorBaseHeight;\n' + shader.fragmentShader.replace(
+        'vec3 totalDiffuse = reflectedLight.directDiffuse + reflectedLight.indirectDiffuse;',
+        `vec3 totalDiffuse = reflectedLight.directDiffuse + reflectedLight.indirectDiffuse;
+         if (closeupFill > 0.0) {
+           float fillFacing = max(dot(normal, normalize(vec3(-.36, .34, .86))), 0.0);
+           float fillRange = 1.0 - smoothstep(.76, 1.45, length(vViewPosition));
+           float fillHead = mix(.16, 1.0, smoothstep(1.33, 1.60, vActorBaseHeight));
+           totalDiffuse += diffuseColor.rgb * vec3(.69, .79, .96) *
+             (.24 + .76 * fillFacing) * fillRange * fillHead * closeupFill;
+         }`
+      );
+    };
   });
   const bone = name => body.getObjectByName('mixamorig' + name) || body.getObjectByName('mixamorig:' + name);
   const head = bone('Head'), hand = bone('RightHand'), hips = bone('Hips');
@@ -605,6 +628,8 @@ export function createCannibal({ scene, camera, collision, audio, trees, model, 
   // Called after the player has moved the camera: the jumpscare takes over the view.
   function frame(dt) {
     if (state !== 'catch' || frozen) return;
+    closeupFill.value = .42 * T.MathUtils.smoothstep(catchTime, 0, .21) *
+      (1 - T.MathUtils.smoothstep(catchTime, 1.11, 1.52));
     // Face the player, head 0.8 m in front of the eye.
     const eyePos = camera.position;
     if (catchTime < dt * 1.5) {
@@ -636,6 +661,7 @@ export function createCannibal({ scene, camera, collision, audio, trees, model, 
 
   function reset() {
     catching = false; caught = false;
+    closeupFill.value = 0;
     if (fade) fade.style.opacity = '0';
     if (state === 'catch') vanish();
     cooldown = 22;

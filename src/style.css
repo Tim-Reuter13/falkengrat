@@ -150,6 +150,80 @@ kbd { color: #f2d9a4; font: 600 .86rem "Segoe UI",system-ui,sans-serif; }
   .menu { grid-template-columns: 1fr; grid-template-rows: 1fr auto; gap: 1.24rem; }
   .controls { grid-template-columns: repeat(4, 1fr); gap: .6rem; border-left: 0; border-top: 1px solid #f1dfac4d; padding: .8rem 0 0; font-size: .76rem; }
 }
+
+#touch-stick, #touch-turn, #touch-pause, .touch-help, .fg-dock .touch-help,
+.touch-mode .fg-keyboard, .touch-mode .fg-dock .fg-keyboard { display: none; }
+.touch-mode .touch-help { display: block; }
+.touch-mode.playing #game { touch-action: none; }
+.touch-mode .guide {
+  top: max(.75rem, env(safe-area-inset-top));
+  left: max(.75rem, env(safe-area-inset-left));
+}
+.touch-mode #touch-pause {
+  display: block;
+  position: absolute;
+  inset: -5px;
+  min-height: 44px;
+  border: 0;
+  background: transparent;
+  touch-action: manipulation;
+  pointer-events: auto;
+}
+
+@media (orientation: portrait) {
+  .touch-mode.playing #touch-stick {
+    display: grid;
+    place-items: center;
+    position: fixed;
+    z-index: 4;
+    left: max(10px, env(safe-area-inset-left));
+    bottom: calc(18px + env(safe-area-inset-bottom));
+    width: 104px;
+    height: 104px;
+    touch-action: none;
+    user-select: none;
+    -webkit-tap-highlight-color: transparent;
+    opacity: .56;
+    transition: opacity .16s ease;
+  }
+  #touch-stick::before, #touch-stick::after {
+    content: "";
+    grid-area: 1 / 1;
+    border-radius: 50%;
+    pointer-events: none;
+  }
+  #touch-stick::before {
+    width: 72px;
+    height: 72px;
+    border: 1px solid #fff9e887;
+    background: #10171124;
+    box-shadow: 0 1px 5px #0005;
+  }
+  #touch-stick::after {
+    width: 20px;
+    height: 20px;
+    border: 1px solid #fff9e8a8;
+    background: #fff9e847;
+    transform: translate(var(--stick-x, 0px), var(--stick-y, 0px));
+    box-shadow: 0 1px 4px #0007;
+  }
+  .touch-mode.playing #touch-stick.engaged { opacity: .86; }
+}
+
+@media (orientation: landscape) {
+  .touch-mode #touch-turn {
+    display: grid;
+    place-items: center;
+    position: fixed;
+    inset: 0;
+    z-index: 40;
+    padding: 1.5rem;
+    background: #0e150feb;
+    color: #efeadc;
+    text-align: center;
+  }
+}
+
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { transition: none !important; }
 }

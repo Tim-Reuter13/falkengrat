@@ -13,6 +13,8 @@
   <div class="fg-poster" aria-hidden="true"></div>
   <div id="fg-display-tone" aria-hidden="true"></div>
   <div id="fg-screen-texture" aria-hidden="true"></div>
+  <div id="touch-stick" aria-hidden="true"></div>
+  <div id="touch-turn" role="status">Dreh dein Handy ins Hochformat.</div>
   <div class="menu fg-menu" id="menu">
     <main class="start fg-start">
       <div class="fg-crest" aria-hidden="true"><i></i><i></i><i></i></div>
@@ -90,7 +92,7 @@
       </div>
 
       <div role="tabpanel" class="fg-content" id="fg-controls" aria-labelledby="fg-tab-controls" hidden>
-        <dl class="fg-controls">
+        <dl class="fg-controls fg-keyboard">
           <div><dt>Laufen</dt><dd><kbd>W A S D</kbd></dd></div>
           <div><dt>Umsehen</dt><dd><kbd>Maus</kbd></dd></div>
           <div><dt>Schlagen</dt><dd><kbd>Linksklick</kbd></dd></div>
@@ -100,19 +102,26 @@
           <div><dt>Fotomodus</dt><dd><kbd>P</kbd></dd></div>
           <div><dt>Pause</dt><dd><kbd>Esc</kbd></dd></div>
         </dl>
+        <dl class="fg-controls touch-help">
+          <div><dt>Laufen</dt><dd>Joystick links</dd></div>
+          <div><dt>Umsehen</dt><dd>Rechts wischen</dd></div>
+          <div><dt>Schlagen</dt><dd>Rechts kurz antippen</dd></div>
+          <div><dt>Pause</dt><dd>Zielhinweis antippen</dd></div>
+        </dl>
       </div>
     </section>
 
-    <footer class="fg-dock" aria-label="Wichtige Tasten">
-      <span><kbd>W A S D</kbd>Laufen</span>
-      <span><kbd>Maus</kbd>Umsehen</span>
-      <span><kbd>P</kbd>Fotomodus</span>
-      <span><kbd>Esc</kbd>Pause</span>
+    <footer class="fg-dock" aria-label="Steuerung">
+      <span class="fg-keyboard"><kbd>W A S D</kbd>Laufen</span>
+      <span class="fg-keyboard"><kbd>Maus</kbd>Umsehen</span>
+      <span class="fg-keyboard"><kbd>P</kbd>Fotomodus</span>
+      <span class="fg-keyboard"><kbd>Esc</kbd>Pause</span>
+      <span class="touch-help">Links laufen · Rechts wischen</span>
     </footer>
   </div>
-  <div class="hud" aria-hidden="true">
-    <div class="guide"><i id="guide"></i><span id="objective"></span></div>
-    <div class="reticle"></div>
+  <div class="hud">
+    <div class="guide"><i id="guide" aria-hidden="true"></i><span id="objective"></span><button type="button" id="touch-pause" aria-label="Spiel pausieren" aria-describedby="objective"></button></div>
+    <div class="reticle" aria-hidden="true"></div>
   </div>
   <div id="fg-fade" aria-hidden="true"></div>
   <div id="death" class="death" role="alertdialog" aria-labelledby="death-title" hidden>

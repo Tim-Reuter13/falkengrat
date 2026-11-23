@@ -14,6 +14,7 @@ import { createMountainScenery } from './mountains.js';
 import { bladesPerTuft, createForestFloor, createForestProps, createGrass } from './groundcover.js';
 import { createForest, createUnderstory, exportTreeAtlas } from './forest.js';
 import { createPlayer, createSound } from './player.js';
+import { createTouchControls } from './touch-controls.js';
 import { makeCollision } from './collision.js';
 import { createSword } from './sword.js';
 import { createAirEffects } from './vfx.js';
@@ -188,6 +189,14 @@ async function game() {
   calm.addEventListener('change',()=>{setCalm();preference('falkengrat-calm',String(calm.checked));});
 
   let active=false, photo=false, locked=false, lookDrag=false, awaitingLock=false, dragDistance=0;
+  const touchPause=$('touch-pause');
+  const touch=createTouchControls(canvas,{
+    isActive: ()=>active,
+    move: player.steer,
+    look: (dx,dy)=>player.look(dx,dy,2.4),
+    tap: ()=>{if(!photo)sword.attack();},
+  });
+  const desktopFov=camera.fov;
   let last=performance.now(), lastDraw=0, elapsed=0, frameCount=0, realTime=0, sampledFPS=0;
   let sampleWindow=0, windowFrames=0, reached=false, framesRendered=0;
   let qualityKey=preference('falkengrat-quality')||'balanced';
@@ -202,6 +211,7 @@ async function game() {
     viewportWidth=Math.max(2,window.innerWidth);
     viewportHeight=Math.max(2,window.innerHeight);
     camera.aspect=viewportWidth/viewportHeight;
+    camera.fov=touch.enabled&&touch.portrait.matches?78:desktopFov;
     camera.updateProjectionMatrix();
     pipe.resize(viewportWidth,viewportHeight,scale,quality.rayScale);
   }
@@ -222,6 +232,7 @@ async function game() {
   }
   function pause() {
     active=false;lookDrag=false;awaitingLock=false;
+    touch.reset();
     sword.block(false);
     if(document.pointerLockElement===canvas)document.exitPointerLock();
     player.keys.clear();
@@ -235,6 +246,7 @@ async function game() {
   let dead=false;
   function caught(){
     dead=true;active=false;
+    touch.reset();
     sword.block(false);player.keys.clear();
     document.body.classList.remove('playing');
     document.body.classList.add('dead');
@@ -252,13 +264,15 @@ async function game() {
   $('death-again').addEventListener('click',revive);
   let lockEnabled=true,firstEntry=true;
   function launch() {
+    if(touch.enabled&&!touch.portrait.matches)return;
     if(firstEntry){player.enterTrail();firstEntry=false;}
     active=true;
+    touch.reset();
     setPhoto(false);
     document.body.classList.add('playing');
     audio.start();
     canvas.focus({preventScroll:true});
-    if(!lockEnabled||document.pointerLockElement===canvas||!canvas.requestPointerLock)return;
+    if(touch.enabled||!lockEnabled||document.pointerLockElement===canvas||!canvas.requestPointerLock)return;
     awaitingLock=true;
     try {
       const result=canvas.requestPointerLock();
@@ -287,7 +301,11 @@ async function game() {
     if(document.hidden&&active)pause();
     last=performance.now();
   });
-  window.addEventListener('blur',()=>{player.keys.clear();sword.block(false);lookDrag=false;});
+  window.addEventListener('blur',()=>{player.keys.clear();sword.block(false);lookDrag=false;touch.reset();});
+  touch.portrait.addEventListener('change',()=>{
+    if(active&&touch.enabled&&!touch.portrait.matches)pause();
+  });
+  touchPause.addEventListener('click',()=>{if(active)pause();});
   window.addEventListener('resize',resize);
   play.addEventListener('click',launch);
   qualityInput.addEventListener('change',()=>changeQuality(qualityInput.value));
@@ -302,7 +320,7 @@ async function game() {
   showAudio();
   window.addEventListener('keydown',event=>{
     if(event.code==='F3') {event.preventDefault();if(!event.repeat){debug=!debug;metrics.hidden=!debug;}return;}
-    if(!active)return;
+    if(!active||(event.target===touchPause&&event.code==='Space'))return;
     if(['Space','ArrowUp','ArrowDown','ArrowLeft','ArrowRight','Escape'].includes(event.code))event.preventDefault();
     if(event.code==='Space'){if(!event.repeat)player.jump();return;}
     if(event.code==='Escape'&&!event.repeat){pause();return;}
@@ -319,7 +337,7 @@ async function game() {
   window.addEventListener('keyup',e=>player.keys.delete(e.code));
   canvas.addEventListener('contextmenu',e=>e.preventDefault());
   canvas.addEventListener('pointerdown',event=>{
-    if(!active)return;
+    if(!active||event.pointerType==='touch')return;
     if(event.button===2){sword.block(!photo);return;}
     if(event.button!==0||photo&&locked)return;
     if(locked)sword.attack();
@@ -329,24 +347,25 @@ async function game() {
     }
   });
   document.addEventListener('pointermove',event=>{
-    if(!active||(!locked&&!lookDrag))return;
+    if(!active||event.pointerType==='touch'||(!locked&&!lookDrag))return;
     dragDistance+=Math.abs(event.movementX)+Math.abs(event.movementY);
     player.look(event.movementX,event.movementY);
   });
   document.addEventListener('pointerup',event=>{
+    if(event.pointerType==='touch')return;
     if(event.button===2)sword.block(false);
     if(event.button===0&&lookDrag){
       if(dragDistance<5&&active&&!photo)sword.attack();
       lookDrag=false;
     }
   });
-  canvas.addEventListener('lostpointercapture',()=>{lookDrag=false;});
+  canvas.addEventListener('lostpointercapture',event=>{if(event.pointerType!=='touch')lookDrag=false;});
   canvas.addEventListener('webglcontextlost',event=>{
     event.preventDefault(); if(active)pause();
     play.disabled=true;play.querySelector('span').textContent='Grafikkontext verloren';
     subtitle.textContent='Lade die Seite neu, um weiterzuspielen.';
   });
-  window.addEventListener('pagehide',()=>audio.suspend());
+  window.addEventListener('pagehide',()=>{touch.reset();audio.suspend();});
   resize();
 
   // The source build can regenerate the exact PNG impostors it ships with.
@@ -453,5 +472,5 @@ async function game() {
 game().catch(error=>{
   console.error(error);
   play.querySelector('span').textContent='Spiel konnte nicht starten';
-  subtitle.textContent='Starte die Datei in einem Desktop-Browser mit WebGL 2 und aktiver Hardwarebeschleunigung.';
+  subtitle.textContent='Öffne Falkengrat in einem Browser mit WebGL 2 und aktiver Hardwarebeschleunigung.';
 });
