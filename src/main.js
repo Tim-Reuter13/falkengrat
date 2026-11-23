@@ -387,6 +387,22 @@ async function game() {
       night:value=>setNight(value,true),
       cannibal:{state:cannibal.state,...Object.fromEntries(Object.entries(cannibal.debug).map(([k,f])=>[k,(...a)=>f(...a,player.ground)]))},
       look:(heading,tilt)=>player.place(player.ground.x,player.ground.z,heading,tilt),
+      // Fixed-step logic without rendering: scripted player (each(t) may move/turn him),
+      // used to test the cannibal's behaviour fast and reproducibly.
+      simulate:(seconds,each,step=1/60)=>{
+        const out=[];
+        for(let t=0;t<seconds;t+=step){
+          const r=each?.(t,step);
+          if(r==='stop')break;
+          for(let i=0;i<2;i++)player.update(step/2,!cannibal.catching);
+          dayNight.update(step);
+          cannibal.update(step,player.ground,true);
+          cannibal.frame(step);
+          camera.updateMatrixWorld();
+        }
+        return out;
+      },
+      turn:(heading,tilt)=>player.turn(heading,tilt),
       camera,cannibalModel:cannibal.root,
     };
   }

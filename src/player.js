@@ -40,6 +40,8 @@ export function createPlayer(camera, collision, audio) {
       lookY=clamp(lookY+dy*.0023,-.26,.26);
     },
     place,
+    // Turn the head without moving (test scripts).
+    turn(heading,tilt){yaw=heading;pitch=tilt;euler.set(pitch,yaw,0);camera.quaternion.setFromEuler(euler);camera.updateMatrixWorld();},
     update(dt,moving) {
       const run=keys.has('ShiftLeft')||keys.has('ShiftRight');
       const left=keys.has('KeyA')||keys.has('ArrowLeft');

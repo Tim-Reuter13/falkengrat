@@ -23,6 +23,7 @@ export function makeCollision(){
   const ray=new Ray(),normal=new Vector3(),hit=new Vector3(),candidate=new Vector3(),triPoint=new Vector3();
   const edge=new Vector3(),delta=new Vector3();
   const faces=[];
+  const segRay=new Ray(),segDelta=new Vector3(),segHit=new Vector3(),segSeen=new Set();
   const meshTree=o=>o.tree??=(buildTree(o.geometry,o.matrix));
 
   function register(entry){
@@ -157,6 +158,41 @@ export function makeCollision(){
         const into=Math.min(0,velocity.x*pushX+velocity.z*pushZ);
         velocity.x-=into*pushX;velocity.z-=into*pushZ;
       }
+    },
+    // First solid surface (trunk, rock, log) between two points, walking only the cells
+    // along the segment. Used for sight lines and sound occlusion over long distances.
+    blocked(from,to){
+      segDelta.subVectors(to,from);
+      const length=segDelta.length();
+      if(length<1e-4)return null;
+      segRay.origin.copy(from);segRay.direction.copy(segDelta).multiplyScalar(1/length);
+      let closest=length,target=null;
+      segSeen.clear();
+      const steps=Math.max(1,Math.ceil(length/(cellSize*.5)));
+      for(let s=0;s<=steps;s++){
+        const x=from.x+segDelta.x*s/steps,z=from.z+segDelta.z*s/steps;
+        around(x,z,cellSize*.5,o=>{
+          if(segSeen.has(o))return;
+          segSeen.add(o);
+          if(!segRay.intersectsBox(o.bounds))return;
+          if(o.geometry){
+            faces.length=0;meshTree(o).getRayTriangles(segRay,faces);
+            for(const t of faces){
+              if(!segRay.intersectTriangle(t.a,t.b,t.c,false,segHit))continue;
+              const distance=from.distanceTo(segHit);
+              if(distance<closest){closest=distance;target=o;}
+            }
+          }else{
+            const ox=from.x-o.x,oz=from.z-o.z,d=segRay.direction;
+            const a=d.x*d.x+d.z*d.z,b=ox*d.x+oz*d.z;
+            const disc=b*b-a*(ox*ox+oz*oz-o.radius*o.radius);
+            if(a<1e-6||disc<0)return;
+            const distance=(-b-Math.sqrt(disc))/a,y=from.y+d.y*distance;
+            if(distance>=0&&distance<closest&&y>=o.bounds.min.y&&y<=o.bounds.max.y){closest=distance;target=o;}
+          }
+        });
+      }
+      return target?{type:target.type,distance:closest,entry:target}:null;
     },
     strike(origin,direction,reach){
       ray.set(origin,direction);
