@@ -27,7 +27,7 @@ function interpolate(frames,time,result) {
   }
 }
 
-export function createSword(camera,scene,collision,audio,onImpact,equipment,probe) {
+export function createSword(camera,scene,collision,audio,onImpact,equipment,probe,targets=[]) {
   const weapon=new T.Group();
   const hand=equipment.hand,blade=equipment.sword;
   weapon.add(hand,blade);camera.add(weapon);weapon.visible=false;
@@ -82,7 +82,14 @@ export function createSword(camera,scene,collision,audio,onImpact,equipment,prob
     camera.getWorldDirection(aim);
     if(Math.abs(aim.y)>.93)return;
     const origin=camera.position;
-    const contact=collision.strike(origin,aim,2.77);
+    let contact=collision.strike(origin,aim,2.77);
+    // Living targets (the cannibal) are hit when nothing solid is closer.
+    let body=null;
+    for(const target of targets){
+      const hit=target.strike(origin,aim,2.77);
+      if(hit&&(!contact||hit.distance<contact.distance)&&(!body||hit.distance<body.distance))body=hit;
+    }
+    if(body)contact={type:'body',distance:body.distance};
     if(!contact)return;
     const travel=contact.distance;
     const x=origin.x+aim.x*travel,z=origin.z+aim.z*travel,y=origin.y+aim.y*travel;
@@ -94,6 +101,7 @@ export function createSword(camera,scene,collision,audio,onImpact,equipment,prob
       particle.v.set(Math.cos(angle)*mix(.3,2.3,rand())-aim.x*.5,mix(.05,1.9,rand()),Math.sin(angle)*mix(.3,2.3,rand())-aim.z*.5);
     }
     audio.hit();
+    body?.hit();
     onImpact(contact.type);
   }
 

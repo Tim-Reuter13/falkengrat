@@ -1,5 +1,5 @@
 import { build } from 'esbuild';
-import { readFile, writeFile, mkdir } from 'node:fs/promises';
+import { readFile, writeFile, mkdir, readdir } from 'node:fs/promises';
 import { dirname, extname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -17,8 +17,11 @@ const files={
   meadow:'meadow.jpg',turf:'woodland-turf.jpg',needles:'needle-bed.jpg',limestone:'limestone.jpg',
   meadowNormal:'meadow-normal.webp',limestoneNormal:'limestone-normal.webp',
   ...(bake?{}:{atlasFir:'impostor-fir.png',atlasSpruce:'impostor-spruce.png'}),
+  cannibal:'kannibale.glb',boneDagger:'knochendolch.glb',
 };
-const types={'.jpg':'image/jpeg','.png':'image/png','.webp':'image/webp','.glb':'model/gltf-binary'};
+// Recorded CC0 sounds (assets/sfx/CREDITS.json), embedded as sfx/<name>.
+for(const file of (await readdir(resolve(root,'assets/sfx'))).filter(f=>f.endsWith('.mp3')).sort())files['sfx/'+file.slice(0,-4)]='sfx/'+file;
+const types={'.jpg':'image/jpeg','.png':'image/png','.webp':'image/webp','.glb':'model/gltf-binary','.mp3':'audio/mpeg'};
 const entries=await Promise.all(Object.entries(files).map(async ([key,file])=>{
   const data=await readFile(resolve(root,'assets',file));
   return [key,`data:${types[extname(file)]};base64,${data.toString('base64')}`];
