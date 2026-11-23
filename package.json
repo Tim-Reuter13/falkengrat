@@ -4,7 +4,8 @@
   "scripts": {
     "build": "node tools/build.mjs",
     "build:bake": "node tools/build.mjs --bake",
-    "build:pages": "node tools/build.mjs --out=docs/index.html"
+    "build:pages": "node tools/build.mjs --out=docs/index.html",
+    "build:region": "node tools/build-region.mjs"
   },
   "dependencies": {
     "esbuild": "0.25.10",

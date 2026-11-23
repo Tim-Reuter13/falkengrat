@@ -1,0 +1,46 @@
+<!doctype html>
+<html lang="de">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Oldhoffen · Falkengrat</title>
+  <style>/* REGION_STYLES */</style>
+</head>
+<body>
+  <canvas id="region" aria-label="Spielbares Gelände um Oldhoffen"></canvas>
+  <div id="touch-stick" aria-hidden="true"></div>
+  <div class="hud" hidden>
+    <span id="location" class="location"></span>
+    <button id="open-map" type="button" aria-label="Karte öffnen">Karte <kbd>M</kbd></button>
+  </div>
+  <div class="forest-entry" hidden>
+    <a href="Falkengrat-Wald.html">Waldstück betreten <kbd>Enter</kbd></a>
+  </div>
+  <dialog id="map" aria-labelledby="map-title">
+    <header>
+      <div>
+        <h1 id="map-title">Oldhoffen</h1>
+        <p>Region Falkengrat · 30 × 18 km</p>
+      </div>
+      <button id="resume" class="primary" type="button" autofocus>Erkunden</button>
+    </header>
+    <div class="map-tabs">
+      <button id="art-tab" type="button" aria-pressed="true" aria-controls="art">Wanderkarte</button>
+      <button id="plan-tab" type="button" aria-pressed="false" aria-controls="plan">Routenplan</button>
+    </div>
+    <img id="art" src="/* REGION_ART */" alt="Illustrierte Wanderkarte mit Oldhoffen im Tal, Nebelkamm im Nordwesten, Glasweiher im Nordosten und dem Aussichtspunkt Falkengrat südlich des Dorfs.">
+    <canvas id="plan" width="1000" height="600" hidden aria-label="Maßstäblicher Routenplan der spielbaren Landschaft"></canvas>
+    <section class="travel" aria-label="Startpunkt wählen">
+      <button type="button" data-site="town">Oldhoffen</button>
+      <button type="button" data-site="pass">Nebelkamm</button>
+      <button type="button" data-site="lake">Glasweiher</button>
+      <button type="button" data-site="trailhead">Wanderparkplatz</button>
+      <button type="button" data-site="lookout">Aussichtspunkt</button>
+      <a href="Falkengrat-Wald.html">Zum bisherigen Falkengrat-Wald</a>
+    </section>
+    <p id="controls" class="controls">WASD laufen · Maus umsehen · Shift sprinten · M oder Esc für die Karte</p>
+    <p id="render-error" hidden>Die Wanderkarte ist verfügbar. Der begehbare Blockout benötigt WebGL 2.</p>
+  </dialog>
+  <script>/* REGION_CODE */</script>
+</body>
+</html>

@@ -18,6 +18,8 @@ Unter **Einstellungen → Modelle** öffnet **Model Preview** eine eigene 3D-Ans
 
 ## Aus dem Quellcode bauen
 
+Für den regionalen Oldhoffen-Blockout erzeugt `npm run build:region` zwei zusammengehörige Dateien in `dist`. Öffne `Falkengrat-Region.html` für die 30 × 18 km große Region mit 25 provisorischen Wohnhäusern, Talstraße, Abbiegespur und Wanderweg. Die Wanderkarte ist eine Illustration. Der Routenplan zeigt die tatsächlich gebauten Strecken und den eigenen Standort maßstäblich. Am Wanderparkplatz und am Aussichtspunkt führt **Waldstück betreten** ins bestehende Spiel in `Falkengrat-Wald.html`, in dem der Kannibale nachts erscheint.
+
 ```sh
 npm ci
 npm run build

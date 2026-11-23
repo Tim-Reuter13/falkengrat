@@ -1,0 +1,80 @@
+:root {
+  color-scheme: dark;
+  font: 15px/1.4 system-ui, sans-serif;
+  color: #e8e4d7;
+  background: #303e39;
+}
+* { box-sizing: border-box; }
+[hidden] { display: none !important; }
+body { margin: 0; overflow: hidden; overscroll-behavior: none; }
+button, a { color: inherit; }
+button { font: inherit; cursor: pointer; }
+:is(button, a):focus-visible { outline: 2px solid #e6ca8d; outline-offset: 3px; }
+#region { position: fixed; inset: 0; width: 100%; height: 100%; touch-action: none; }
+.hud {
+  position: fixed; inset: max(12px, env(safe-area-inset-top)) 12px auto;
+  display: flex; justify-content: space-between; gap: 12px; align-items: flex-start;
+  pointer-events: none;
+}
+.hud :is(button, span), .forest-entry a {
+  background: #18251fe0; border: 1px solid #cccaac4b;
+  border-radius: 4px; padding: 8px 11px; text-decoration: none; color: #ede8d8;
+}
+.hud button { pointer-events: auto; }
+.forest-entry { position: fixed; bottom: 26px; inset-inline: 8px; text-align: center; pointer-events: none; }
+.forest-entry a { display: inline-block; pointer-events: auto; }
+kbd { color: #dec38a; margin-left: 5px; font-size: .82em; }
+dialog {
+  width: min(940px, calc(100vw - 24px));
+  max-height: calc(100dvh - 24px);
+  padding: clamp(12px, 2.2vw, 23px);
+  border: 1px solid #9a9d8670;
+  color: #e8e4d7;
+  background: #1c2923;
+  border-radius: 9px;
+}
+dialog::backdrop { background: #111915bf; }
+header { display: flex; justify-content: space-between; align-items: end; gap: 12px; margin-bottom: 12px; }
+header h1 { font: 400 clamp(30px, 5vw, 54px)/1 Georgia, serif; margin: 0 0 4px; letter-spacing: -.025em; }
+header p, .controls { color: #b7bfad; margin: 0; }
+.map-tabs, .travel { display: flex; flex-wrap: wrap; gap: 7px; }
+.map-tabs { margin-bottom: 8px; }
+button, .travel a {
+  border: 1px solid #b6b99f5e;
+  background: #2a3930;
+  color: #ece5d5;
+  padding: 7px 11px;
+  border-radius: 4px;
+  text-decoration: none;
+}
+:is(button, .travel a):hover { background: #3a4c3f; }
+.primary, .primary:hover, .map-tabs button[aria-pressed="true"] { background: #d3c295; color: #263026; border-color: #e4d4a9; }
+#art, #plan { width: 100%; height: auto; display: block; border-radius: 3px; }
+.travel { margin: 11px 0; }
+.controls { font-size: .81rem; }
+#touch-stick { display: none; }
+.touch-mode.playing #touch-stick {
+  display: grid;
+  place-items: center;
+  position: fixed;
+  width: 104px; height: 104px;
+  left: max(10px, env(safe-area-inset-left));
+  bottom: calc(18px + env(safe-area-inset-bottom));
+  touch-action: none; user-select: none; opacity: .58;
+  -webkit-tap-highlight-color: transparent;
+}
+#touch-stick::before, #touch-stick::after {
+  content: ""; grid-area: 1 / 1; border-radius: 50%; pointer-events: none;
+}
+#touch-stick::before { width: 72px; height: 72px; border: 1px solid #fff9e887; background: #10171124; }
+#touch-stick::after {
+  width: 20px; height: 20px; border: 1px solid #fff9e8a8; background: #fff9e847;
+  transform: translate(var(--stick-x, 0), var(--stick-y, 0)); box-shadow: 0 1px 4px #0007;
+}
+.touch-mode.playing #touch-stick.engaged { opacity: .86; }
+.touch-mode kbd { display: none; }
+.touch-mode .forest-entry { text-align: right; }
+@media (max-width: 550px) {
+  .travel button, .travel a { font-size: .83rem; }
+  header p { font-size: .78rem; }
+}
