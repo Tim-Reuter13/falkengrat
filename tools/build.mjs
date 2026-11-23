@@ -39,6 +39,7 @@ const result=await build({
 });
 const template=await readFile(resolve(root,'src/index.html'),'utf8');
 const style=await readFile(resolve(root,'src/style.css'),'utf8');
+const previewStyle=await readFile(resolve(root,'src/model-preview.css'),'utf8');
 // Main and pause menu: styles follow the game styles, the controller runs after the game script.
 const poster=await readFile(resolve(root,'assets/menu-panorama.webp'));
 const menuStyle=(await readFile(resolve(root,'src/menu.css'),'utf8'))
@@ -46,7 +47,7 @@ const menuStyle=(await readFile(resolve(root,'src/menu.css'),'utf8'))
 const menuCode=(await readFile(resolve(root,'src/menu.js'),'utf8')).replace(/<\/script/gi,'<\\/script');
 const notice=await readFile(resolve(root,'node_modules/three/LICENSE'),'utf8');
 const source=result.outputFiles[0].text.replace(/<\/script/gi,'<\\/script');
-const html=template.replace('/* GAME_STYLES */',()=>style+'\n'+menuStyle).replace('/* GAME_CODE */',()=>source).replace('/* MENU_CODE */',()=>menuCode)
+const html=template.replace('/* GAME_STYLES */',()=>style+'\n'+menuStyle+'\n'+previewStyle).replace('/* GAME_CODE */',()=>source).replace('/* MENU_CODE */',()=>menuCode)
   .replace('</body>',()=>`<!-- Three.js\n${notice}\n-->\n</body>`);
 await mkdir(dirname(output),{recursive:true});
 await writeFile(output,html);

@@ -38,7 +38,7 @@ function branchTube(points, radius, sides = 5, trunk = false) {
   return geometry;
 }
 
-function makeTree(species) {
+export function makeTree(species) {
   const rand = random(15512+species*8172);
   const wood = [], shades = [];
   const root = new T.Vector3(0,-.024,0);

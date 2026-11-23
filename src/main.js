@@ -19,6 +19,7 @@ import { makeCollision } from './collision.js';
 import { createSword } from './sword.js';
 import { createAirEffects } from './vfx.js';
 import { createCannibal } from './cannibal.js';
+import { createModelPreview } from './model-preview.js';
 
 const $ = id => document.getElementById(id);
 const canvas=$('game'), play=$('play'), menu=$('menu'), subtitle=$('subtitle');
@@ -163,6 +164,9 @@ async function game() {
   const sfx=Object.fromEntries(Object.entries(assetUrls).filter(([key])=>key.startsWith('sfx/')).map(([key,url])=>[key.slice(4),url]));
   const cannibal=createCannibal({scene,camera,collision,audio,trees:forest.trees,model:cannibalModel,dagger:daggerModel,sounds:sfx,
     isNight:()=>dayNight.night,onCatch:()=>caught()});
+  // Settings > Modelle: every creature, item and prop in its own 3D viewer.
+  const modelPreview=createModelPreview({assetUrls,textures});
+  $('fg-open-models')?.addEventListener('click',event=>modelPreview.open(undefined,event.currentTarget));
 
   let toastTime=0;
   function toast(text,seconds=2.3) {
@@ -403,12 +407,14 @@ async function game() {
         return out;
       },
       turn:(heading,tilt)=>player.turn(heading,tilt),
-      camera,cannibalModel:cannibal.root,
+      camera,cannibalModel:cannibal.root,preview:modelPreview,
     };
   }
 
   function loop(now) {
     requestAnimationFrame(loop);
+    // The model preview covers the screen and renders on its own canvas.
+    if(modelPreview.isOpen){last=now;return;}
     const delta=(now-last)/1000;
     if(delta<0 || (lastDraw&&now-lastDraw<(active?4:43)))return;
     last=now;lastDraw=now;

@@ -3,7 +3,7 @@ import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { altitude, mix, noise, pathX, random, riverBank, riverWidth, riverX, TAU, waterLevel } from './math.js';
 import { waterContact } from './water-contact.js';
 
-function rootTube(points,radius,seed){
+export function rootTube(points,radius,seed){
   const curve=new T.CatmullRomCurve3(points);
   const positions=[],indices=[],uv=[];
   const up=new T.Vector3(0,1,0),along=new T.Vector3(),side=new T.Vector3(),lift=new T.Vector3();
@@ -33,25 +33,31 @@ function rootTube(points,radius,seed){
   return geometry;
 }
 
+// Bark-ridged log or stump (also used by the model preview).
+export function logGeometry(top,bottom,height,seed,weathered=false){
+  const geometry=new T.CylinderGeometry(top,bottom,height,25,11);
+  const p=geometry.attributes.position,n=geometry.attributes.normal,uv=geometry.attributes.uv;
+  for(let i=0;i<p.count;i++){
+    const x=p.getX(i),y=p.getY(i),z=p.getZ(i),a=Math.atan2(z,x);
+    const r=Math.hypot(x,z);
+    const ridge=1+.051*Math.sin(a*5+seed)+.023*Math.cos(a*11);
+    const splinter=weathered?(y>0?1:.48)*Math.abs(y/height)**7*Math.sin(a*7+seed)*4.3:0;
+    p.setXYZ(i,x*ridge+.038*(y/height+.5)**2,
+      y+Math.min(1,r/top)*((.018*Math.cos(a*3+seed)+.011*Math.sin(a*7))*(y/height+.53)+splinter),
+      z*ridge-.016*(y/height+.5));
+    if(weathered&&Math.abs(n.getY(i))<.8)uv.setY(i,uv.getY(i)*height*1.30);
+  }
+  geometry.computeVertexNormals();
+  return geometry;
+}
+
 export function placeDeadwood(scene,textures,collision){
   const bark=new T.MeshPhysicalMaterial({map:textures.bark,normalMap:textures.barkNormal,
     normalScale:new T.Vector2(.58,.58),roughness:.99,specularIntensity:.17});
   const endgrain=new T.MeshPhysicalMaterial({map:textures.endgrain,normalMap:textures.endgrainNormal,
     normalScale:new T.Vector2(.53,.53),roughness:.92,specularIntensity:.15});
   function makeLog(top,bottom,height,seed,weathered=false){
-    const geometry=new T.CylinderGeometry(top,bottom,height,25,11);
-    const p=geometry.attributes.position,n=geometry.attributes.normal,uv=geometry.attributes.uv;
-    for(let i=0;i<p.count;i++){
-      const x=p.getX(i),y=p.getY(i),z=p.getZ(i),a=Math.atan2(z,x);
-      const r=Math.hypot(x,z);
-      const ridge=1+.051*Math.sin(a*5+seed)+.023*Math.cos(a*11);
-      const splinter=weathered?(y>0?1:.48)*Math.abs(y/height)**7*Math.sin(a*7+seed)*4.3:0;
-      p.setXYZ(i,x*ridge+.038*(y/height+.5)**2,
-        y+Math.min(1,r/top)*((.018*Math.cos(a*3+seed)+.011*Math.sin(a*7))*(y/height+.53)+splinter),
-        z*ridge-.016*(y/height+.5));
-      if(weathered&&Math.abs(n.getY(i))<.8)uv.setY(i,uv.getY(i)*height*1.30);
-    }
-    geometry.computeVertexNormals();
+    const geometry=logGeometry(top,bottom,height,seed,weathered);
     const log=new T.Mesh(geometry,[bark,endgrain,endgrain]);
     log.castShadow=true;log.receiveShadow=true;scene.add(log);
     return log;

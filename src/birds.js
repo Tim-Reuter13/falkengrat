@@ -55,7 +55,7 @@ function wing(side,tip) {
   return mergeGeometries(shapes);
 }
 
-function birdParts() {
+export function birdParts() {
   const body=mergeGeometries([
     oval(0,0,.028,.088,.097,.192,'#b4b1a9',.24),
     oval(0,.040,-.108,.060,.077,.102,'#b5b1aa',-.25),
@@ -76,6 +76,42 @@ function birdParts() {
     ...[-1,0,1].map(side=>oval(x+side*.013,-.138,-.023,.006,.007,.024,'#61574c')),
   ]));
   return [body,head,tail,feet,wing(-1,false),wing(1,false),wing(-1,true),wing(1,true)];
+}
+
+// Joint hierarchy of a bird: body, head, tail, feet, two shoulders with a wrist each.
+// birdParts()[i] hangs on rig.parts[i] (body, head, tail, feet, inner wings, wing tips).
+export function createBirdRig() {
+  const bird=new T.Object3D(),head=new T.Object3D(),tail=new T.Object3D(),feet=new T.Object3D();
+  const shoulders=[new T.Object3D(),new T.Object3D()],wrists=[new T.Object3D(),new T.Object3D()];
+  bird.add(head,tail,feet,...shoulders);
+  bird.rotation.order='YXZ';
+  head.position.set(0,.075,-.145);tail.position.set(0,-.013,.145);
+  for(let i=0;i<2;i++){
+    const sign=i===0?-1:1;
+    shoulders[i].position.set(sign*.052,.024,-.056);
+    shoulders[i].rotation.order='YZX';wrists[i].rotation.order='YZX';
+    wrists[i].position.set(sign*.268,0,.047);shoulders[i].add(wrists[i]);
+  }
+  return {bird,head,tail,feet,shoulders,wrists,parts:[bird,head,tail,feet,...shoulders,...wrists]};
+}
+
+// Pose of head, tail, legs and wings. spread 0 = folded on a perch, 1 = wings out;
+// wingbeat -1..1 is the stroke, glide 0..1 holds the wings still, legs 0..1 tucks the feet.
+export function poseBird(rig,{time,phase,spread,wingbeat,glide,legs}) {
+  const {head,tail,feet,shoulders,wrists}=rig;
+  head.rotation.set(.16*Math.sin(time*1.25+phase)*(1-spread),.63*Math.sin(time*.88+phase)*(1-spread),0);
+  tail.rotation.x=mix(-.27,.10+wingbeat*.12,spread);
+  tail.scale.x=mix(.69,1.14,spread);
+  feet.scale.setScalar(Math.max(.001,legs));
+  feet.rotation.x=(1-legs)*1.32;
+  for(let i=0;i<2;i++){
+    const sign=i===0?-1:1;
+    const downstroke=wingbeat>=0?wingbeat*.82:wingbeat*.71;
+    shoulders[i].rotation.z=sign*mix(-.58,.08+downstroke*(1-glide*.93),spread);
+    shoulders[i].rotation.y=sign*mix(-1.27,-.11-wingbeat*.16*(1-glide),spread);
+    wrists[i].rotation.z=sign*mix(-.40,-.11-Math.sin(time*4+wingbeat)*.26*(1-glide),spread);
+    wrists[i].rotation.y=sign*mix(-.68,-.10+(1-glide)*Math.max(0,wingbeat)*.29,spread);
+  }
 }
 
 export function createBirds(scene,textures,perches,collision,audio) {
@@ -110,18 +146,7 @@ export function createBirds(scene,textures,perches,collision,audio) {
     inst.instanceMatrix.setUsage(T.DynamicDrawUsage);scene.add(inst);
     return inst;
   });
-  const bird=new T.Object3D(),head=new T.Object3D(),tail=new T.Object3D(),feet=new T.Object3D();
-  const shoulders=[new T.Object3D(),new T.Object3D()],wrists=[new T.Object3D(),new T.Object3D()];
-  bird.add(head,tail,feet,...shoulders);
-  bird.rotation.order='YXZ';
-  head.position.set(0,.075,-.145);tail.position.set(0,-.013,.145);
-  for(let i=0;i<2;i++){
-    const sign=i===0?-1:1;
-    shoulders[i].position.set(sign*.052,.024,-.056);
-    shoulders[i].rotation.order='YZX';wrists[i].rotation.order='YZX';
-    wrists[i].position.set(sign*.268,0,.047);shoulders[i].add(wrists[i]);
-  }
-  const parts=[bird,head,tail,feet,...shoulders,...wrists];
+  const rig=createBirdRig(),{bird,parts}=rig;
   let flushed=0;
   function flightPath(b,t,out) {
     const a=t*(.088+b.group*.009)+b.group*2.19+b.offset;
@@ -193,19 +218,7 @@ export function createBirds(scene,textures,perches,collision,audio) {
       const inFlight=spread>.04&&v.lengthSq()>.0001;
       bird.rotation.set(inFlight?clamp(Math.atan2(v.y,Math.hypot(v.x,v.z))*.62,-.52,.62):.13,
         inFlight?Math.atan2(-v.x,-v.z):b.facing,bank);
-      head.rotation.set(.16*Math.sin(time*1.25+b.phase)*(1-spread),.63*Math.sin(time*.88+b.phase)*(1-spread),0);
-      tail.rotation.x=mix(-.27,.10+wingbeat*.12,spread);
-      tail.scale.x=mix(.69,1.14,spread);
-      feet.scale.setScalar(Math.max(.001,legs));
-      feet.rotation.x=(1-legs)*1.32;
-      for(let i=0;i<2;i++){
-        const sign=i===0?-1:1;
-        const downstroke=wingbeat>=0?wingbeat*.82:wingbeat*.71;
-        shoulders[i].rotation.z=sign*mix(-.58,.08+downstroke*(1-glide*.93),spread);
-        shoulders[i].rotation.y=sign*mix(-1.27,-.11-wingbeat*.16*(1-glide),spread);
-        wrists[i].rotation.z=sign*mix(-.40,-.11-Math.sin(time*4+wingbeat)*.26*(1-glide),spread);
-        wrists[i].rotation.y=sign*mix(-.68,-.10+(1-glide)*Math.max(0,wingbeat)*.29,spread);
-      }
+      poseBird(rig,{time,phase:b.phase,spread,wingbeat,glide,legs});
       bird.updateMatrixWorld(true);
       for(let i=0;i<parts.length;i++)batches[i].setMatrixAt(visible,parts[i].matrixWorld);
       visible++;

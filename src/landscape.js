@@ -294,7 +294,7 @@ export function createTerrain(scene, textures, floor) {
   terrainSections(scene,material);
 }
 
-function rockGeometry(seed, detail) {
+export function rockGeometry(seed, detail) {
   const rand = random(seed);
   let geometry = new T.IcosahedronGeometry(1, detail);
   const p = geometry.attributes.position;
@@ -321,10 +321,9 @@ function rockGeometry(seed, detail) {
   return geometry;
 }
 
-export function createRocks(scene, textures, collision) {
-  const rand = random(849674);
-  const object = new T.Object3D();
-  const mat = mapMaterials(new T.MeshPhysicalMaterial({vertexColors:true,roughness:.98,specularIntensity:.15}), {
+// Rock material: world-space triplanar granite/limestone with moss and wet banks.
+export function rockMaterial(textures) {
+  return mapMaterials(new T.MeshPhysicalMaterial({vertexColors:true,roughness:.98,specularIntensity:.15}), {
     granite: { value: textures.granite }, moss: { value: textures.moss }, rockNormal: { value: textures.rockNormal },
     limestone:{value:textures.limestone}, limestoneNormal:{value:textures.limestoneNormal},
   }, {
@@ -359,6 +358,12 @@ export function createRocks(scene, textures, collision) {
     stoneN=normalize(stoneN+(bump-stoneN*dot(stoneN,bump))*1.43*(1.-smoothstep(24.,89.,length(vViewPosition))));
     normal=normalize((viewMatrix*vec4(stoneN,0.)).xyz);
   `);
+}
+
+export function createRocks(scene, textures, collision) {
+  const rand = random(849674);
+  const object = new T.Object3D();
+  const mat = rockMaterial(textures);
   const landmarks = [
     [-7.8,-10,3.3,2.3,2.8],[10.2,-14,3.6,2.6,2.4],[-4.7,-26,2.5,1.7,1.45],
     [16,-36,3.4,3.0,2.2],[-11,-49,4.4,3.3,2.8],[overlook.x-5,-118,3.9,2.1,3.7],

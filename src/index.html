@@ -37,6 +37,7 @@
         <button id="fg-tab-display" type="button" role="tab" aria-selected="true" aria-controls="fg-display">Bildschirm</button>
         <button id="fg-tab-game" type="button" role="tab" aria-selected="false" aria-controls="fg-game" tabindex="-1">Grafik &amp; Ton</button>
         <button id="fg-tab-controls" type="button" role="tab" aria-selected="false" aria-controls="fg-controls" tabindex="-1">Steuerung</button>
+        <button id="fg-tab-models" type="button" role="tab" aria-selected="false" aria-controls="fg-models-tab" tabindex="-1">Modelle</button>
       </div>
 
       <div role="tabpanel" class="fg-content" id="fg-display" aria-labelledby="fg-tab-display">
@@ -108,6 +109,11 @@
           <div><dt>Schlagen</dt><dd>Rechts kurz antippen</dd></div>
           <div><dt>Pause</dt><dd>Zielhinweis antippen</dd></div>
         </dl>
+      </div>
+
+      <div role="tabpanel" class="fg-content" id="fg-models-tab" aria-labelledby="fg-tab-models" hidden>
+        <p class="fg-models-intro">Lebewesen, Ausrüstung und Natur aus dem Spiel in 3D ansehen: drehen, zoomen, Animationen abspielen, Skelett und Gittermodell einblenden, Größe am Meterraster ablesen.</p>
+        <button type="button" id="fg-open-models" class="fg-open-models"><i aria-hidden="true"></i>Model Preview öffnen</button>
       </div>
     </section>
 
