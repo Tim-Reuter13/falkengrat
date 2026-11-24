@@ -8,12 +8,15 @@ import { makeTree } from './forest.js';
 import { rockGeometry, rockMaterial } from './landscape.js';
 import { logGeometry, rootTube } from './wood.js';
 import { clamp, mix, smooth, TAU } from './math.js';
+import { adaptClips, clipKey } from './cannibal/clips.js';
 
 // Model preview: every creature, item and prop of the game in its own studio scene,
 // with orbit camera, animation player, wireframe, skeleton, metre grid and statistics.
 // It has its own renderer and canvas and loads its own copies, so the game is untouched.
 
 const CLIP_NAMES = {
+  k2_stalk: 'Pirsch (Keyframe)', k2_watch: 'Lauern (Keyframe)', k2_perch: 'Tierhocke (Keyframe)', k2_leap: 'Sprung (Keyframe)',
+  k2_scream: 'Angriff (Keyframe)', k2_peek: 'Spähen hinter dem Stamm (Keyframe)',
   k_stalk: 'Anpirschen (Kriechen)', k_run: 'Rennen', k_climb: 'Klettern (Mocap-Basis)', k_leap: 'Sprung',
   k_scream: 'Schrei-Angriff', k_perch: 'Hocken und Beobachten', f_death_fall: 'Tod',
 };
@@ -53,7 +56,13 @@ export function createModelPreview({ assetUrls, textures }) {
           grip.quaternion.setFromUnitVectors(new T.Vector3(0, 1, 0), side.addScaledVector(fingers, -side.dot(fingers)).normalize());
           grip.position.copy(fingers).multiplyScalar(middle.position.length() * .62);
         }
-        return { object, clips: m.animations.map(c => ({ name: CLIP_NAMES[c.name] ?? c.name, clip: c })) };
+        // The same clips as in the game: keyframe clips first, old mocap clips only where no
+        // keyframe clip has taken their role (rennen, klettern, tod).
+        const sources = await Promise.all(Object.keys(assetUrls).filter(k => k.startsWith('clip/')).sort().map(loadGlb));
+        const keyframes = adaptClips(m, sources);
+        const roles = new Set(keyframes.map(c => clipKey(c.name)));
+        const all = [...keyframes, ...m.animations.filter(c => !roles.has(clipKey(c.name)))];
+        return { object, clips: all.map(c => ({ name: CLIP_NAMES[c.name] ?? c.name, clip: c })) };
       } },
     { id: 'vogel', group: 'Lebewesen', name: 'Rabe', view: -150,
       note: 'Aus Ovalen und Federfächern gebaut. Flügelschlag, Gleiten und Kopfbewegung sind prozedural, mit denselben Gelenken wie im Spiel.',

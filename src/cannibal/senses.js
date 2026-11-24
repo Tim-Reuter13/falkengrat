@@ -56,9 +56,11 @@ export function createSenses({ collision, trees }) {
 
   // ---------- lines of sight
   const seg = new T.Vector3(), probe = new T.Vector3(), zero = new T.Vector3();
+  // Every 0.75 m along the line: narrow crests between two hollows must not be skipped.
   function terrainBlocks(from, to) {
-    for (let i = 1; i < 10; i++) {
-      const s = i / 10, x = from.x + (to.x - from.x) * s, z = from.z + (to.z - from.z) * s, y = from.y + (to.y - from.y) * s;
+    const n = Math.min(80, Math.max(10, Math.ceil(Math.hypot(to.x - from.x, to.z - from.z) / .75)));
+    for (let i = 1; i < n; i++) {
+      const s = i / n, x = from.x + (to.x - from.x) * s, z = from.z + (to.z - from.z) * s, y = from.y + (to.y - from.y) * s;
       if (altitude(x, z) > y + .04) return true;
     }
     return false;

@@ -128,7 +128,7 @@ export function createCannibal({ scene, camera, collision, audio, trees, model, 
   let seenMeter = 0, clarity = 0, inView = false, visible = 0, watching = false, distance = 99, bearingFromPlayer = 0;
   let hiddenNow = 0, catching = false, caught = false, catchTime = 0, noise = 0, approachingPlayer = 0;
   let need = 8, observed = 0, hideFor = 6, waitFor = 2, tree = null, nextTree = null, test = null, lastTest = -99;
-  let breathAt = 0, perceiveAt = 0, plan = null, planTries = 0, jump = null, seenAtTime = 0, checkAt = 0, replanAt = 0;
+  let planOf = null, planAge = 0, planGap = 0, blockedFor = 0, breathAt = 0, perceiveAt = 0, plan = null, planTries = 0, jump = null, seenAtTime = 0, checkAt = 0, replanAt = 0;
   const badSpots = [];
   const stats = { freezes: 0, hops: 0, climbs: 0, covers: 0, breaks: [], strikes: 0, evades: 0, retreats: 0, tests: 0, despawnsInView: 0 };
   const log = [];
@@ -359,13 +359,28 @@ export function createCannibal({ scene, camera, collision, audio, trees, model, 
     faceTo(player.pos.x, player.pos.z, true);
     health = 2; seenMeter = 0; tree = null;
     show(true); knifeGrip.visible = true;
-    beginObserve('arrived');
+    beginObserve('arrived', found.cover);
     return true;
   }
-  function beginObserve(why) {
+  let peekCover = null;
+  function beginObserve(why, cover = null) {
     observed = 0;
     need = (4 + 12 * traits.patience) * (1 + caution() * .7) * (1 + memory.alert * .6) * (1.25 - traits.hunger * .6);
+    // At a thick trunk he stands behind it and leans out to look (the curious more often);
+    // elsewhere he lurks in a crouch, one hand on the ground (keyframe clip "watch").
+    peekCover = bodyRig.actions.peek && cover?.kind === 'tree' && cover.r >= .27 && rand() < .45 + traits.curiosity * .45 ? cover : null;
+    if (peekCover) placeForPeek();
     setState('observe', why);
+  }
+  // The peek clip leans out to his right, so he stands centred behind a trunk wider than his shoulders:
+  // upright he is covered, leaning out his head clears the bark.
+  function placeForPeek() {
+    const c = peekCover, dx = c.x - player.pos.x, dz = c.z - player.pos.z, L = Math.hypot(dx, dz) || 1;
+    const bx = dx / L, bz = dz / L, lx = -bz, lz = bx;   // b: player -> trunk; l: his left while facing the player
+    const back = c.r + .3, side = 0;   // centred: covered upright, the lean takes the head clear
+    pos.set(c.x + bx * back + lx * side, 0, c.z + bz * back + lz * side);
+    pos.y = altitude(pos.x, pos.z);
+    faceTo(player.pos.x, player.pos.z, true);
   }
 
   // ---------- being seen: break the line of sight, never vanish
@@ -561,9 +576,11 @@ export function createCannibal({ scene, camera, collision, audio, trees, model, 
 
     switch (state) {
       case 'observe': {
-        // Watches from cover: still, staring, breathing slowly.
+        // Watches from cover: still, staring, breathing slowly. Peeking round a trunk he ducks
+        // back into a squat when the player faces his way (unless he is very bold).
         faceTo(player.pos.x, player.pos.z);
-        crouch('perch');
+        if (peekCover) crouch(watching && traits.boldness < .7 ? 'perch' : 'peek');
+        else crouch(bodyRig.actions.watch ? 'watch' : 'perch');
         rig.lookWeight = 1;
         observed += dt * (memory.playerMode === 'still' ? 1.1 : 1);
         updateTest(dt);
@@ -574,6 +591,8 @@ export function createCannibal({ scene, camera, collision, audio, trees, model, 
           if (t) { faceTo(t.x, t.z); startClimb(t); break; }
         }
         if (observed >= need && !watching && !test) { plan = null; setState('approach', 'patience spent'); }
+        // The player keeps facing his way: instead of waiting forever he circles round to a flank.
+        else if (observed >= need + 10 && watching && !test) { plan = planCover('vantage'); if (plan) setState('reposition', 'circles round'); else observed = need; }
         break;
       }
       case 'climb': {
@@ -637,24 +656,40 @@ export function createCannibal({ scene, camera, collision, audio, trees, model, 
           }
           if (!plan) replanAt = now + mix(.8, 2, rand());
         }
-        if (!plan) { crouch(); rig.lookWeight = 1; faceTo(player.pos.x, player.pos.z); break; }
+        if (!plan) {
+          crouch(); rig.lookWeight = 1; faceTo(player.pos.x, player.pos.z);
+          // No cover on the way in and the player never turns his back: try another side.
+          blockedFor += dt;
+          if (blockedFor > mix(8, 16, traits.patience)) { blockedFor = 0; const flank = planCover('vantage'); if (flank) { plan = flank; setState('reposition', 'no way in'); } }
+          break;
+        }
         // Moves only while the player looks elsewhere; his noise covers faster moves.
         const masked = noise >= .45;
         if (watching && !masked) {
           if (inView) stats.freezes += rig.speed > 0 ? 1 : 0;
           crouch(rig.gait === 'stalk' ? 'stalk' : 'perch');
           rig.lookWeight = 1;
+          // Stared at for long: no way in from the front, so he works round to a flank.
+          blockedFor += dt;
+          if (blockedFor > mix(6, 14, traits.patience)) { blockedFor = 0; const flank = planCover('vantage'); if (flank) { plan = flank; setState('reposition', 'flanks'); } }
           break;
         }
+        blockedFor = 0;
         const gap = Math.hypot(plan.x - pos.x, plan.z - pos.z);
         const dash = !plan.open && gap > 5 && behind() > 1.9 && distance > 12;
-        const speed = (dash ? 4.2 : mix(1.1, 1.7, traits.boldness)) * (masked ? 1.5 : 1) * (1 + traits.hunger * .25);
+        // The keyframe stalk is a slow, heavy creep (its feet slide ~0.35 m/s): he creeps at 0.6-0.95 m/s and dashes between covers.
+        const speed = (dash ? 4.2 : mix(.6, .95, traits.boldness) * (masked ? 1.5 : 1) * (1 + traits.hunger * .25));
         rig.lookWeight = .55;
         if (walkTo(plan.x, plan.z, speed, dt)) {
           waitFor = mix(.8, 4.5, caution()) * (1 + memory.alert * .8) * (1.2 - traits.hunger * .5);
           plan = null;
           setState('wait', 'at cover');
+          break;
         }
+        // A cover he cannot reach (wedged against a rock or trunk): give it up and look again.
+        if (plan !== planOf) { planOf = plan; planAge = 0; planGap = gap; }
+        planAge += dt;
+        if (planAge > 4 + planGap / Math.max(speed, .5) * 2) { badSpots.push(new T.Vector3(plan.x, 0, plan.z)); if (badSpots.length > 8) badSpots.shift(); plan = null; }
         break;
       }
       case 'wait': {
@@ -709,7 +744,7 @@ export function createCannibal({ scene, camera, collision, audio, trees, model, 
         // Still visible after all? This spot is no good: find another.
         if (stateTime > .35 && stateTime < 2 && hiddenNow < .75 && inView) { badSpots.push(pos.clone()); if (badSpots.length > 8) badSpots.shift(); plan = planCover('evade'); setState('evade', 'spot exposed'); break; }
         if (approachingPlayer > .8 && distance < 16) { plan = planCover('retreat'); stats.retreats++; setState('retreat', 'player comes'); break; }
-        if (stateTime > hideFor && !watching) { plan = planCover('vantage'); setState('reposition', 'other side'); }
+        if (stateTime > hideFor && (!watching || stateTime > hideFor * 2.5)) { plan = planCover('vantage'); setState('reposition', 'other side'); }
         break;
       }
       case 'retreat': {
@@ -723,10 +758,18 @@ export function createCannibal({ scene, camera, collision, audio, trees, model, 
       }
       case 'reposition': {
         if (!plan) { plan = planCover('vantage'); if (!plan) { setState('hide', 'no vantage'); hideFor = 3; break; } }
-        if (watching && inView) { crouch('stalk'); break; }
+        if (stateTime > 25) { plan = null; beginObserve('gave up moving'); break; }
+        if (watching && inView) {
+          crouch('stalk');
+          // Caught in the open while moving round: get out of sight first.
+          blockedFor += dt;
+          if (blockedFor > 3) { blockedFor = 0; plan = planCover('evade'); setState('evade', 'exposed while circling'); }
+          break;
+        }
+        blockedFor = 0;
         rig.lookWeight = .3;
         const speed = distance > 20 && behind() > 1.6 ? 4 : 1.8;
-        if (walkTo(plan.x, plan.z, speed, dt)) { plan = null; beginObserve('new side'); }
+        if (walkTo(plan.x, plan.z, speed, dt)) { const c = plan.cover; plan = null; beginObserve('new side', c); }
         if (stateTime > 25) { plan = null; beginObserve('gave up moving'); }
         break;
       }
@@ -837,7 +880,7 @@ export function createCannibal({ scene, camera, collision, audio, trees, model, 
       memory: { ...memory, lastSeenAt: memory.lastSeenAt && [+memory.lastSeenAt.x.toFixed(1), +memory.lastSeenAt.z.toFixed(1)], lookRate: +memory.lookRate.toFixed(2), alert: +memory.alert.toFixed(2), playerSpeed: +memory.playerSpeed.toFixed(2), unseenFor: +memory.unseenFor.toFixed(1) },
       need: +need.toFixed(1), observed: +observed.toFixed(1), plan: plan && { x: +plan.x.toFixed(1), z: +plan.z.toFixed(1), hidden: +(plan.hidden ?? 0).toFixed(2), cover: plan.cover?.kind ?? 'ground' },
       stats: { ...stats, breaks: stats.breaks.slice(-6) }, log: log.slice(-14),
-      gait: rig.mode + '/' + rig.gait, speed: +rig.speed.toFixed(2), hip: +bodyRig.hipOffset.toFixed(3), contacts: bodyRig.contacts.count,
+      gait: rig.mode + '/' + rig.gait, peeking: !!peekCover, speed: +rig.speed.toFixed(2), hip: +bodyRig.hipOffset.toFixed(3), contacts: bodyRig.contacts.count,
       dagger: drop.taken ? 'taken' : drop.resting ? 'ground' : drop.active ? 'falling' : 'hand',
       daggerPos: drop.active ? { x: knife.position.x, y: knife.position.y, z: knife.position.z } : null,
       sounds: voice.decoded, played: voice.count, recent: voice.recent.slice(-8), playing: voice.playing, audio: audio.context?.state ?? 'none',
@@ -846,6 +889,14 @@ export function createCannibal({ scene, camera, collision, audio, trees, model, 
       spawn(p) { if (p) observePlayer(0, p); nightTime = 99; cooldown = 0; setState('away'); return spawn(); },
       groundAt(x, z, p) { if (p) observePlayer(0, p); placeAt(x, z); beginObserve('test'); },
       observeAt(x, z, p) { if (p) observePlayer(0, p); placeAt(x, z); beginObserve('test'); },
+      peekAt(x, z, p) {
+        if (p) observePlayer(0, p);
+        let best = null, bd = 1e9;
+        for (const c of senses.covers) { const d = Math.hypot(c.x - x, c.z - z); if (c.kind === 'tree' && c.r >= .27 && d < bd) { bd = d; best = c; } }
+        if (!best) return false;
+        placeAt(best.x, best.z); const keep = traits.curiosity; traits.curiosity = 2; beginObserve('test', best); traits.curiosity = keep;
+        return { trunk: [best.x, best.z, best.r], peeking: !!peekCover };
+      },
       approachFrom(x, z, p) { if (p) observePlayer(0, p); placeAt(x, z); observed = 99; setState('approach', 'test'); },
       perchAt(x, z, p) { if (p) observePlayer(0, p); const t = treeNear(x, z, 15); if (!t) return false; placeAt(t.x, t.z); crownSpot(t, player.pos, pos); tree = t; rig.tree = t; setState('crown', 'test'); return true; },
       climbAt(x, z, p) { if (p) observePlayer(0, p); const t = treeNear(x, z, 15); if (!t) return false; const a = Math.atan2(player.pos.x - t.x, player.pos.z - t.z); placeAt(t.x, t.z); rig.climbAngle = a; rig.climbHeight = 0; placeOnTrunk(t, a, 0); startClimb(t); rig.climbAngle = a; return true; },
@@ -862,6 +913,7 @@ export function createCannibal({ scene, camera, collision, audio, trees, model, 
       set(next) { setState(next, 'test'); },
       measure: name => voice.measure(name),
       reset() { reset(); show(false); setState('away', 'test reset'); newNight(); stats.breaks.length = 0; stats.despawnsInView = 0; },
+      trace(name, count) { return bodyRig.trace(name, count); },
       bodyInfo() { const f = bodyRig.feet; return { analysis: bodyRig.analysis, leap: bodyRig.leap, contacts: bodyRig.contacts.count, plantedSamples: f.samples, meanPlantError: f.samples ? +(f.err / f.samples).toFixed(4) : 0, maxPlantError: +f.maxErr.toFixed(4), meanCorrectedSlip: f.samples ? +(f.slipSum / f.samples).toFixed(3) : 0 }; },
       resetFeet() { Object.assign(bodyRig.feet, { samples: 0, err: 0, maxErr: 0, slipSum: 0 }); bodyRig.contacts.count = 0; },
       los(ax, ay, az, bx, by, bz) {

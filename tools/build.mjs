@@ -21,6 +21,8 @@ const files={
 };
 // Recorded CC0 sounds (assets/sfx/CREDITS.json), embedded as sfx/<name>.
 for(const file of (await readdir(resolve(root,'assets/sfx'))).filter(f=>f.endsWith('.mp3')).sort())files['sfx/'+file.slice(0,-4)]='sfx/'+file;
+// Keyframe clips for the cannibal from the Animation Studio, embedded as clip/<name>.
+for(const file of (await readdir(resolve(root,'assets/kannibale-clips'))).filter(f=>f.endsWith('.glb')).sort())files['clip/'+file.slice(0,-4)]='kannibale-clips/'+file;
 const types={'.jpg':'image/jpeg','.png':'image/png','.webp':'image/webp','.glb':'model/gltf-binary','.mp3':'audio/mpeg'};
 const entries=await Promise.all(Object.entries(files).map(async ([key,file])=>{
   const data=await readFile(resolve(root,'assets',file));

@@ -1,6 +1,7 @@
 import * as T from 'three';
 import { altitude, clamp, mix, smooth } from '../math.js';
 import { aimChain, solveTwoBone } from './ik.js';
+import { clipKey } from './clips.js';
 
 // The cannibal's body: mocap clips as the base layer, then procedural work on top.
 //  - locomotion clips play at the speed their own planted feet move (measured at load)
@@ -25,7 +26,9 @@ export function createBody({ root, model, onContact }) {
   const mixer = new T.AnimationMixer(body);
   const actions = {}, clips = {};
   for (const clip of model.animations) {
-    const k = clip.name.replace(/^k_/, '').replace(/^f_death_fall$/, 'death');
+    // Keyframe clips (k2_*) take the role of the old mocap clip with the same name.
+    const k = clipKey(clip.name);
+    if (clips[k]?.name.startsWith('k2_') && !clip.name.startsWith('k2_')) continue;
     actions[k] = mixer.clipAction(clip); clips[k] = clip;
   }
 
@@ -54,25 +57,29 @@ export function createBody({ root, model, onContact }) {
     mixer.stopAllAction();
   }
   const analysis = {};
-  for (const name of ['stalk', 'run', 'perch', 'climb']) {
+  for (const name of ['stalk', 'run', 'perch', 'climb', 'watch', 'peek']) {
     if (!actions[name]) continue;
     const tracks = limbs.map(() => []);
     sample(name, (t) => limbs.forEach((l, i) => tracks[i].push([t, l.bones[2].getWorldPosition(v).clone()])));
     const info = { contact: {}, speed: 0 };
-    const speeds = [];
+    // Natural speed: how fast a planted foot slides back in the in-place clip. Per foot median,
+    // then the faster foot (keyframe cycles can have one foot that barely slides).
+    let footSpeed = 0;
     limbs.forEach((l, i) => {
       const ys = tracks[i].map(([, p]) => p.y);
       const min = Math.min(...ys);
       const h = min + (l.foot ? .045 : .04);
       info.contact[l.name] = { min, h };
-      const tr = tracks[i];
+      if (!l.foot) return;
+      const tr = tracks[i], speeds = [];
       for (let k = 0; k + 1 < tr.length; k++) {
         if (tr[k][1].y > h || tr[k + 1][1].y > h) continue;
         speeds.push(-(tr[k + 1][1].z - tr[k][1].z) / (tr[k + 1][0] - tr[k][0]));
       }
+      speeds.sort((a, b) => a - b);
+      if (speeds.length) footSpeed = Math.max(footSpeed, speeds[Math.floor(speeds.length / 2)]);
     });
-    speeds.sort((a, b) => a - b);
-    info.speed = speeds.length ? speeds[Math.floor(speeds.length / 2)] : 0;
+    info.speed = footSpeed;
     analysis[name] = info;
   }
   // Leap: hips curve tells crouch -> push-off -> flight -> landing.
@@ -92,7 +99,19 @@ export function createBody({ root, model, onContact }) {
       leap.crouch = before.reduce((m, f) => f[2] < m[2] ? f : m, before[0] ?? feet[0])[0];
       leap.end = Math.min(clips.leap.duration, leap.land + .45);
     }
+    // The keyframe leap is timed by hand: wind-up 0-0.25 s, take-off 0.25, landing 0.85, caught 1.3.
+    if (clips.leap.name.startsWith('k2_')) Object.assign(leap, { crouch: .22, takeoff: .25, land: .85, end: 1.3 });
+    // The clip lifts its own hips during the flight (up to ~0.7 m); the root already flies a
+    // ballistic arc, so that lift is taken out again while airborne.
+    leap.hips = feet.map(f => [f[0], f[2]]);
   }
+  const leapHip = t => {
+    const h = leap.hips;
+    if (!h?.length) return 0;
+    let i = 0; while (i + 1 < h.length && h[i + 1][0] < t) i++;
+    const [t0, y0] = h[i], [t1, y1] = h[Math.min(i + 1, h.length - 1)];
+    return t1 > t0 ? mix(y0, y1, clamp((t - t0) / (t1 - t0), 0, 1)) : y0;
+  };
 
   // ---------- clip playback
   let current = null;
@@ -125,7 +144,7 @@ export function createBody({ root, model, onContact }) {
     tree: null, climbHeight: 0, climbAngle: 0, trunkRadius: () => .3,
     jump: null,            // { phase: 'windup'|'flight'|'land', s }
   };
-  let hipOffset = 0, hipVelocity = 0, hipTarget = 0;
+  let hipOffset = 0, hipVelocity = 0, hipTarget = 0, liftComp = 0;
   const contacts = { count: 0, last: [] };
   const feet = { samples: 0, err: 0, maxErr: 0, slipSum: 0 };
 
@@ -134,23 +153,29 @@ export function createBody({ root, model, onContact }) {
     let scale = 1;
     if (ctx.gait === 'stalk') scale = info?.speed > .15 ? ctx.speed / info.speed : ctx.speed / 1.2;
     else if (ctx.gait === 'run') scale = info?.speed > .8 ? ctx.speed / info.speed : ctx.speed / 5;
-    else if (ctx.gait === 'perch') scale = .75;
-    if (ctx.speed < .05 && ctx.gait !== 'perch') scale = .12;
+    else if (ctx.gait === 'perch' || ctx.gait === 'watch' || ctx.gait === 'peek') scale = .85;
+    // A creep or run frozen mid-step (he stops when glanced at); idle clips keep their own tempo.
+    if (ctx.speed < .05 && (ctx.gait === 'stalk' || ctx.gait === 'run')) scale = .12;
     if (current) current.timeScale = clamp(scale, .1, 2.6);
   }
 
   const pole = new T.Vector3(), a0 = new T.Vector3(), a2 = new T.Vector3(), up = new T.Vector3(0, 1, 0);
+  // Ankle / wrist height over the ground when the sole or palm rests on it. Fixed, because the
+  // clips come from a skeleton with other limb lengths (their lowest hand may sit below ground).
+  const jointHeight = l => l.foot ? .075 : .04;
   function groundIK(dt) {
     const info = analysis[ctx.gait];
     let lowest = 0, planted = 0;
-    const handsToo = ctx.gait === 'stalk' || ctx.gait === 'perch';
+    const handsToo = ctx.gait === 'stalk' || ctx.gait === 'perch' || ctx.gait === 'watch';
     for (const l of limbs) {
-      if (!l.foot && !handsToo) { l.planted = false; continue; }
+      // Hands only where the clip really puts them down (a raised hand stays raised).
+      if (!l.foot && (!handsToo || (info?.contact[l.name]?.min ?? 1) > .3)) { l.planted = false; l.ik = false; continue; }
+      l.ik = true;
       const end = l.bones[2];
       end.getWorldPosition(l.anim);
       const hClip = l.anim.y - root.position.y - hipOffset;
       const c = info?.contact[l.name];
-      if (!c) continue;
+      if (!c) { l.ik = false; continue; }
       const ground = altitude(l.anim.x, l.anim.z);
       const lift = hClip - c.min;
       const inContact = hClip < c.h;
@@ -158,7 +183,7 @@ export function createBody({ root, model, onContact }) {
       if (hClip > c.h + .004) l.armed = true;
       if (inContact && !l.planted && ctx.speed > .05 && l.armed) {
         l.planted = true; l.armed = false;
-        l.plant.set(l.anim.x, ground + c.min, l.anim.z);
+        l.plant.set(l.anim.x, ground + jointHeight(l), l.anim.z);
         contacts.count++; contacts.last.push(l.name); if (contacts.last.length > 8) contacts.last.shift();
         onContact?.(l, l.plant, ctx.gait);
       } else if (l.planted && (!inContact || Math.hypot(l.anim.x - l.plant.x, l.anim.z - l.plant.z) > (l.foot ? .5 : .4) || ctx.speed <= .05)) {
@@ -166,7 +191,7 @@ export function createBody({ root, model, onContact }) {
       }
       if (l.planted) l.target.copy(l.plant);
       else {
-        l.target.set(l.anim.x, ground + Math.max(c.min, c.min + lift), l.anim.z);
+        l.target.set(l.anim.x, ground + jointHeight(l) + Math.max(0, lift), l.anim.z);
         if (l.blend < 1) { l.blend = Math.min(1, l.blend + dt / .12); l.target.lerp(l.from, 1 - l.blend); }
       }
       if (inContact || l.planted) { lowest = Math.min(lowest, ground - root.position.y); planted++; }
@@ -174,7 +199,7 @@ export function createBody({ root, model, onContact }) {
     // Hips sink to the lower contact; small dip on every new plant gives weight.
     hipTarget = clamp(lowest, -.32, .05);
     for (const l of limbs) {
-      if (!l.foot && !handsToo) continue;
+      if (!l.ik) continue;
       const [u, m, e] = l.bones;
       u.getWorldPosition(a0); e.getWorldPosition(a2); m.getWorldPosition(l.mid);
       pole.copy(l.mid).sub(a0.add(a2).multiplyScalar(.5)).normalize().multiplyScalar(.5).add(l.mid);
@@ -242,13 +267,18 @@ export function createBody({ root, model, onContact }) {
       const time = j.phase === 'windup' ? mix(Math.max(0, leap.crouch - .35), leap.crouch, j.s)
         : j.phase === 'flight' ? mix(leap.takeoff, leap.land, j.s) : mix(leap.land, leap.end, j.s);
       scrub('leap', time, j.phase === 'windup' && j.s < .05 ? .12 : 0);
-    } else if (ctx.mode === 'still' && ctx.gait) play(ctx.gait, { fade: .2, once: ctx.gait === 'death' || ctx.gait === 'scream' });
+      // Take the clip's own hip lift out of the flight; the ballistic root carries the arc.
+      liftComp = j.phase === 'flight' ? -(leapHip(time) - mix(leapHip(leap.takeoff), leapHip(leap.land), j.s)) : 0;
+    }
+    else if (ctx.mode === 'still' && ctx.gait) play(ctx.gait, { fade: .2, once: ctx.gait === 'death' || ctx.gait === 'scream' });
+    if (ctx.mode !== 'air') liftComp = 0;
     mixer.update(dt);
     // Hip spring (weight, wind-up crouch, landing absorption).
-    if (ctx.mode === 'air' && ctx.jump?.phase === 'windup') hipTarget = -.22 * ctx.jump.s;
+    // The keyframe leap crouches by itself; the old mocap leap needed help.
+    if (ctx.mode === 'air' && ctx.jump?.phase === 'windup') hipTarget = clips.leap?.name.startsWith('k2_') ? 0 : -.22 * ctx.jump.s;
     hipVelocity += ((hipTarget - hipOffset) * 140 - hipVelocity * 18) * dt;
     hipOffset += hipVelocity * dt;
-    body.position.y = hipOffset;
+    body.position.y = hipOffset + liftComp;
     root.updateMatrixWorld(true);
     if (ctx.mode === 'ground') groundIK(dt);
     else if (ctx.mode === 'climb') { hipTarget = 0; climbIK(); }
@@ -263,6 +293,14 @@ export function createBody({ root, model, onContact }) {
 
   return {
     ctx, update, land, dip, play, scrub, mixer, actions, analysis, leap, limbs, contacts, feet, head, hips,
+    // Test hook: limb end positions (root space) over a clip. Run only while he is not shown.
+    trace(name, count = 48) {
+      const out = [], keep = root.position.clone(), rot = root.rotation.y;
+      root.position.set(0, 0, 0); root.rotation.y = 0; body.position.y = 0;
+      sample(name, t => out.push([+t.toFixed(3), ...limbs.map(l => { const p = l.bones[2].getWorldPosition(v); return [+p.y.toFixed(3), +p.z.toFixed(3)]; })]), count);
+      root.position.copy(keep); root.rotation.y = rot; current = null;
+      return out;
+    },
     get hipOffset() { return hipOffset; },
     get current() { return current; },
   };

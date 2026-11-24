@@ -19,6 +19,7 @@ import { makeCollision } from './collision.js';
 import { createSword } from './sword.js';
 import { createAirEffects } from './vfx.js';
 import { createCannibal } from './cannibal.js';
+import { adaptClips } from './cannibal/clips.js';
 import { createModelPreview } from './model-preview.js';
 
 const $ = id => document.getElementById(id);
@@ -44,7 +45,7 @@ async function loadTextures(renderer) {
   const mask = new Set(['fir','spruce','fern','sprig','alps','foothills','props','habitat','atlasFir','atlasSpruce','endgrain','endgrainNormal']);
   const data = new Set(['groundNormal','rockNormal','barkNormal','atlasFir','atlasSpruce','meadowNormal','limestoneNormal','endgrainNormal','soilNormals','foam']);
   const models3d=new Set(['hand','sword','cannibal','boneDagger']);
-  const records=await Promise.all(Object.entries(assetUrls).filter(([key])=>!models3d.has(key)&&!key.startsWith('sfx/')).map(async ([key,url])=>{
+  const records=await Promise.all(Object.entries(assetUrls).filter(([key])=>!models3d.has(key)&&!key.startsWith('sfx/')&&!key.startsWith('clip/')).map(async ([key,url])=>{
     const tex=await loader.loadAsync(url);
     tex.colorSpace=data.has(key) ? T.NoColorSpace : T.SRGBColorSpace;
     tex.anisotropy=Math.min(8,renderer.capabilities.getMaxAnisotropy());
@@ -126,6 +127,9 @@ async function game() {
   const models=new GLTFLoader();
   const [textures,hand,blade,cannibalModel,daggerModel]=await Promise.all([loadTextures(renderer),models.loadAsync(assetUrls.hand),models.loadAsync(assetUrls.sword),
     models.loadAsync(assetUrls.cannibal),models.loadAsync(assetUrls.boneDagger)]);
+  // Keyframe clips from the Animation Studio replace the cannibal's old mocap clips by role.
+  const clipSources=await Promise.all(Object.keys(assetUrls).filter(k=>k.startsWith('clip/')).sort().map(k=>models.loadAsync(assetUrls[k])));
+  cannibalModel.animations.push(...adaptClips(cannibalModel,clipSources));
   const collision=makeCollision(),audio=createSound();
   const player=createPlayer(camera,collision,audio);
   const clock={value:0};
@@ -407,6 +411,12 @@ async function game() {
         return out;
       },
       turn:(heading,tilt)=>player.turn(heading,tilt),
+      // Draw one frame on demand (also when the page is not visible) and return it as JPEG.
+      snapshot:(width=960,quality=.8)=>{
+        const t=performance.now();lastDraw=0;last=Math.min(last,t-16);loop(t);
+        const c=document.createElement('canvas');c.width=width;c.height=Math.round(width*canvas.height/canvas.width);
+        c.getContext('2d').drawImage(canvas,0,0,c.width,c.height);return c.toDataURL('image/jpeg',quality);
+      },
       camera,cannibalModel:cannibal.root,preview:modelPreview,
     };
   }
