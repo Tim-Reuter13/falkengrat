@@ -109,6 +109,7 @@ export function createPlayer(camera, collision, audio) {
 
 export function createSound() {
   let ctx, master, windGain, streamGain, streamPan, noise, muted=false, ambience=false;
+  let quietBirds=0;   // songbirds sleep at night (and fall silent when something prowls)
   const scratch = Math.random;
   function noiseSound(duration,frequency,amount,kind='bandpass',delay=0,pan=0) {
     if(!ctx||muted)return;
@@ -129,7 +130,7 @@ export function createSound() {
     src.stop(t+duration);
   }
   function bird() {
-    if(!ctx || muted || !ambience) return;
+    if(!ctx || muted || !ambience || Math.random()<quietBirds) return;
     for(let i=0;i<3;i++){
       const osc=ctx.createOscillator(), gain=ctx.createGain(), pan=ctx.createStereoPanner();
       const t=ctx.currentTime+i*.146, hz=1240+scratch()*1270;
@@ -147,6 +148,7 @@ export function createSound() {
   return {
     get context(){return ctx;},
     get output(){return master;},
+    set quietBirds(value){quietBirds=value;},
     start() {
       if(!ctx) {
         const Audio=window.AudioContext||window.webkitAudioContext;

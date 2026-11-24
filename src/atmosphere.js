@@ -11,7 +11,7 @@ const dayHaze = hazeColor.clone(), nightHaze = new T.Color('#1a2231');
 // Graphics tuning handles, only with ?dev in the URL.
 const devTools = new URLSearchParams(location.search).has('dev') ? (window.falkengratGraphics = {}) : null;
 
-const quadVertex = `
+export const quadVertex = `
   varying vec2 vUv;
   void main(){vUv=uv;gl_Position=vec4(position.xy,0.,1.);}
 `;
@@ -126,7 +126,7 @@ export function createDayNight(renderer, fog) {
   const day = { sky:new T.Color('#c4d5e5'), ground:new T.Color('#736b52'), sun:new T.Color('#fff0d6'), ambient:1.24, light:3.15, exposure:1.09 };
   const night = { sky:new T.Color('#4a5f8c'), ground:new T.Color('#1b1d1c'), sun:new T.Color('#a8bcff'), ambient:.46, light:.7, exposure:2.5 };
   const unlit = new T.Color(.058, .074, .118), white = new T.Color(1, 1, 1);
-  let target = 1, value = -1;
+  let target = 1, value = -1, exposure = day.exposure;
   function apply(d) {
     value = d;
     const s = d * d * (3 - 2 * d);
@@ -140,11 +140,14 @@ export function createDayNight(renderer, fog) {
     hazeColor.lerpColors(nightHaze, dayHaze, s);
     fog.color.copy(hazeColor);
     renderer.setClearColor(hazeColor, 1);
-    renderer.toneMappingExposure = T.MathUtils.lerp(night.exposure, day.exposure, s);
+    exposure = T.MathUtils.lerp(night.exposure, day.exposure, s);
+    renderer.toneMappingExposure = exposure;
     nightShade.value.lerpColors(unlit, white, s);
   }
   return {
     get night() { return target === 0; },
+    // Exposure of the day/night grade (the torch's eye adaptation multiplies on top).
+    get exposure() { return exposure; },
     set(isNight, instant = false) { target = isNight ? 0 : 1; if (instant) apply(target); },
     update(dt) {
       if (value === target) return;
@@ -161,6 +164,8 @@ export function createLighting(scene) {
   ambient.layers.enable(1);sun.layers.enable(1);
   ambient.layers.enable(2);sun.layers.enable(2);
   sun.castShadow = true;
+  // The sun/moon map re-renders only when the light rig moves; the torch's map renders every frame.
+  sun.shadow.autoUpdate = false;
   const shadow = sun.shadow;
   shadow.mapSize.set(2048,2048);
   shadow.camera.left = shadow.camera.bottom = -41;
@@ -330,7 +335,7 @@ export function createPipeline(renderer) {
         // Night vision: rods see little colour and lean blue, the frame edges sink further.
         float scotopic=1.-daylight;
         float lum=dot(center,vec3(.2126,.7152,.0722));
-        center=mix(center,lum*vec3(.78,.92,1.18),scotopic*.62);
+        center=mix(center,lum*vec3(.78,.92,1.18),scotopic*.62*(1.-smoothstep(.12,.7,lum)));
         vec2 frame=(vUv-.5)*vec2(1.,.84);
         center*=1.-dot(frame,frame)*mix(.17,.36,scotopic);
         float grain=fract(dot(gl_FragCoord.xy,vec2(.75487766,.56984029)))-.5;
@@ -427,6 +432,7 @@ export function createPipeline(renderer) {
   };
   if (devTools) Object.assign(devTools, { renderer, finalUniforms, rayUniforms, taaUniforms });
   const quad = new T.Mesh(new T.PlaneGeometry(2,2),finalMaterial);
+  let volumeTime=0;
   quad.frustumCulled = false;
   effect.add(quad);
   return {
@@ -483,6 +489,12 @@ export function createPipeline(renderer) {
       camera.layers.mask=visibleLayers;
       // Air effects (shafts, mist, dust) go last so the grass cannot paint over them.
       if(this.overlay)renderer.render(this.overlay,camera);
+      // Torch beam through the mist (additive, HDR, before TAA so its dither is resolved).
+      volumeTime+=dt;
+      if(this.volume?.enabled&&this.volume.prepare(camera,opaque.texture,volumeTime,this.volumeDensity??.02)){
+        quad.material=this.volume.material;
+        renderer.render(effect,ortho);
+      }
       renderer.autoClear=true;
       camera.projectionMatrix.copy(plainProjection);
       camera.projectionMatrixInverse.copy(plainInverse);

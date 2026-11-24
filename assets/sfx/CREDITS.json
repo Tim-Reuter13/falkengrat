@@ -1,5 +1,5 @@
 {
- "note": "All sounds are CC0 1.0 recordings from freesound.org, found via the Openverse API. Cut into short, dry, mono transients (tails gated 18-30 dB under each event's peak, 70 Hz high-pass) so the game can place them in 3D. No synthesised sounds.",
+ "note": "All sounds are CC0 1.0 recordings from freesound.org, found via the Openverse API. Cut into short, dry, mono transients (tails gated 18-30 dB under each event's peak, 70 Hz high-pass) so the game can place them in 3D. No synthesised sounds. Night ambience (nacht-*.mp3) is kept long and unprocessed apart from looping and level.",
  "sources": [
   {
    "title": "Footsteps / Walking on foliage in a forest",
@@ -184,6 +184,28 @@
    "openverse_id": "bae2b772-a614-4a46-ad99-6367a8d4ca39",
    "used_as": [
     "kannibale-fluestern-1.mp3 (2.95s, 0.58s)"
+   ]
+  },
+  {
+   "title": "cricket night ambience lebanon pine forest .wav",
+   "creator": "Ramston",
+   "license": "CC0 1.0",
+   "source": "https://freesound.org/people/Ramston/sounds/580353",
+   "file_url": "https://cdn.freesound.org/previews/580/580353_989468-hq.mp3",
+   "openverse_id": "6a06e64a-79a7-4fb1-a9e6-5618592ca4d9",
+   "used_as": [
+    "nacht-grillen.mp3 (10.0s, 30s seamless loop, mono, level-matched)"
+   ]
+  },
+  {
+   "title": "Tawny Owl",
+   "creator": "faxfaxfax",
+   "license": "CC0 1.0",
+   "source": "https://freesound.org/people/faxfaxfax/sounds/655380",
+   "file_url": "https://cdn.freesound.org/previews/655/655380_12156778-hq.mp3",
+   "openverse_id": "591a0084-9812-4843-a03c-f97327f235d3",
+   "used_as": [
+    "nacht-kauz.mp3 (0.0s, 7.1s)"
    ]
   }
  ]

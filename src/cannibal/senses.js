@@ -102,9 +102,12 @@ export function createSenses({ collision, trees }) {
 
   // Sight of a set of body points from the eye: angle from the view axis, night range, cover.
   // clarity 1 = unmistakably seen, inView = somewhere in the field of view and not hidden.
+  // far: distance at which an unlit figure is lost in the dark (silhouette range at night).
+  // lux(p): illuminance from the player's torch at p - whatever stands in the beam is seen clearly.
   const dir = new T.Vector3();
-  function sight(eye, forward, points, darkness = 1) {
-    let best = 0, sum = 0, inView = false, visibleAny = 0;
+  function sight(eye, forward, points, darkness = 1, far = null, lux = null) {
+    let best = 0, sum = 0, inView = false, visibleAny = 0, lit = 0;
+    const reach = far ?? mix(34, 70, 1 - darkness);
     for (const p of points) {
       dir.subVectors(p, eye);
       const dist = dir.length();
@@ -115,12 +118,15 @@ export function createSenses({ collision, trees }) {
       if (vis < .2) continue;
       visibleAny = Math.max(visibleAny, vis);
       const central = 1 - smooth(16, 50, angle);
-      const range = 1 - smooth(mix(30, 60, 1 - darkness) * .45, mix(34, 70, 1 - darkness), dist);
-      const c = vis * central * range;
+      const range = 1 - smooth(reach * .45, reach, dist);
+      const E = lux ? lux(p) : 0;
+      lit = Math.max(lit, E * vis);
+      const inBeam = smooth(.03, .35, E) * (1 - smooth(30, 56, angle) * .5);
+      const c = vis * Math.max(central * range, inBeam);
       best = Math.max(best, c); sum += c;
       if (angle < 52 && dist < 48) inView = true;
     }
-    return { clarity: best * .65 + sum / points.length * .35, inView, visible: visibleAny };
+    return { clarity: best * .65 + sum / points.length * .35, inView, visible: visibleAny, lit };
   }
 
   // How hidden his crouch is at `spot` (0..1). The points follow the real squat pose of the

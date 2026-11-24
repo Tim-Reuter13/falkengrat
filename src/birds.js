@@ -155,7 +155,7 @@ export function createBirds(scene,textures,perches,collision,audio) {
       -87-b.group*52+Math.sin(a)*(44+b.group*18));
   }
 
-  function update(dt,time,camera,active,speed,swinging) {
+  function update(dt,time,camera,active,speed,swinging,threat=null) {
     let visible=0,airborne=0;
     const cameraPos=camera.position;
     for(const b of roster){
@@ -171,9 +171,13 @@ export function createBirds(scene,textures,perches,collision,audio) {
         p.copy(b.home);p.y+=.138*b.size;
         const dist=p.distanceTo(cameraPos);
         const alarmDist=(swinging?10.3:mix(4.4,8.2,smooth(.9,5.6,speed)));
-        if(active&&dist<alarmDist){
+        // Something creeping below them (the cannibal at night) flushes them as well:
+        // a burst of wings off to the side is a sign that someone is there.
+        const scared=threat&&Math.hypot(p.x-threat.x,p.z-threat.z)<7.5;
+        if(active&&(dist<alarmDist||scared)){
+          const from=scared&&dist>=alarmDist?threat:cameraPos;
           b.state='departing';b.age=-mix(.075,.32,rng());v.set(0,0,0);
-          target.set(p.x-cameraPos.x,0,(p.z-cameraPos.z)*.85-.92).normalize();
+          target.set(p.x-from.x,0,(p.z-from.z)*.85-.92).normalize();
           b.facing=Math.atan2(-target.x,-target.z);
           b.turn=(rng()-.5)*.8;b.climb=mix(2.6,4.1,rng());flushed++;
           audio.wingbeat(dist,clamp(target.dot(right),-.8,.8));

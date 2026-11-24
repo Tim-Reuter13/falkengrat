@@ -8,7 +8,8 @@ import { createRiver } from './river.js';
 import { placeDeadwood } from './wood.js';
 import { createAnimalTraces, createHabitatPlants } from './ecology.js';
 import { createStreamLife } from './stream-life.js';
-import { createDayNight, createLighting, createPipeline, createSky, hazeColor, forestHaze } from './atmosphere.js';
+import { createDayNight, createLighting, createPipeline, createSky, hazeColor, forestHaze, quadVertex } from './atmosphere.js';
+import { createBeamVolume, createFlashlight } from './flashlight.js';
 import { createRocks, createTerrain } from './landscape.js';
 import { createMountainScenery } from './mountains.js';
 import { bladesPerTuft, createForestFloor, createForestProps, createGrass } from './groundcover.js';
@@ -19,6 +20,7 @@ import { makeCollision } from './collision.js';
 import { createSword } from './sword.js';
 import { createAirEffects } from './vfx.js';
 import { createCannibal } from './cannibal.js';
+import { createNightAmbience } from './night-ambience.js';
 import { adaptClips } from './cannibal/clips.js';
 import { createModelPreview } from './model-preview.js';
 
@@ -145,6 +147,9 @@ async function game() {
   setNight(preference('falkengrat-time')==='night',true);
   timeInput?.addEventListener('change',()=>setNight(timeInput.value==='night'));
   const pipe=createPipeline(renderer);
+  // Hand torch (F, mouse wheel = focus) with its volumetric beam.
+  const flashlight=createFlashlight({scene,camera,collision});
+  pipe.volume=createBeamVolume(flashlight,quadVertex);
   createMountainScenery(scene,textures);
   const {perches,contacts,waterObstacles}=createRocks(scene,textures,collision);
   const forest=createForest(scene,renderer,textures,collision,clock);
@@ -165,9 +170,17 @@ async function game() {
   buildTrailMarker(scene,'Falkengrat',pathX(-24)-2.75,-24,textures.bark);
   buildTrailMarker(scene,'Aussicht',overlook.x+2.75,overlook.z-1.8,textures.bark);
   const birds=createBirds(scene,textures,perches,collision,audio);
+  // Layer 3 = what casts shadows in the torch light: every real shadow caster (not the invisible
+  // canopy silhouettes made for the sun) plus the near trunks and crowns (layer 3 only).
+  camera.layers.enable(3);
+  scene.traverse(o=>{if(o.castShadow&&o.material&&o.material.colorWrite!==false)o.layers.enable(3);});
+  flashlight.light.shadow.camera.layers.set(3);
   const sfx=Object.fromEntries(Object.entries(assetUrls).filter(([key])=>key.startsWith('sfx/')).map(([key,url])=>[key.slice(4),url]));
   const cannibal=createCannibal({scene,camera,collision,audio,trees:forest.trees,model:cannibalModel,dagger:daggerModel,sounds:sfx,
-    isNight:()=>dayNight.night,onCatch:()=>caught()});
+    isNight:()=>dayNight.night,onCatch:()=>caught(),flashlight});
+  // Crickets and an owl at night (real recordings); they fall silent around the cannibal.
+  const nightSounds=createNightAmbience({audio,camera,sounds:sfx});
+  let nightLevel=0;
   // Settings > Modelle: every creature, item and prop in its own 3D viewer.
   const modelPreview=createModelPreview({assetUrls,textures});
   $('fg-open-models')?.addEventListener('click',event=>modelPreview.open(undefined,event.currentTarget));
@@ -335,6 +348,7 @@ async function game() {
     if(event.code==='KeyP'&&!event.repeat){setPhoto(!photo);return;}
     if(event.code==='KeyM'&&!event.repeat){toggleSound();toast(muted?'Ton aus':'Ton an');return;}
     if(event.code==='KeyN'&&!event.repeat){setNight(!dayNight.night);toast(dayNight.night?'Nacht':'Tag');return;}
+    if(event.code==='KeyF'&&!event.repeat){flashlight.toggle();return;}
     if(event.code==='KeyE'&&!event.repeat){if(cannibal.take(player.ground))toast('Knochendolch aufgehoben',3);return;}
     if(['Digit1','Digit2','Digit3'].includes(event.code)&&!event.repeat){
       changeQuality(['speed','balanced','high'][Number(event.code.slice(-1))-1]);
@@ -344,6 +358,8 @@ async function game() {
   });
   window.addEventListener('keyup',e=>player.keys.delete(e.code));
   canvas.addEventListener('contextmenu',e=>e.preventDefault());
+  // Mouse wheel turns the torch head (flood <-> spot).
+  window.addEventListener('wheel',event=>{if(!active||!flashlight.on)return;event.preventDefault();flashlight.wheel(event.deltaY);},{passive:false});
   canvas.addEventListener('pointerdown',event=>{
     if(!active||event.pointerType==='touch')return;
     if(event.button===2){sword.block(!photo);return;}
@@ -393,7 +409,7 @@ async function game() {
       atlas:()=>exportTreeAtlas(renderer,forest.targets),
       place:(x,z,heading,tilt)=>player.place(x,z,heading,tilt),
       night:value=>setNight(value,true),
-      cannibal:{state:cannibal.state,...Object.fromEntries(Object.entries(cannibal.debug).map(([k,f])=>[k,(...a)=>f(...a,player.ground)]))},
+      nightSounds:nightSounds.state,cannibal:{state:cannibal.state,...Object.fromEntries(Object.entries(cannibal.debug).map(([k,f])=>[k,(...a)=>f(...a,player.ground)]))},
       look:(heading,tilt)=>player.place(player.ground.x,player.ground.z,heading,tilt),
       // Fixed-step logic without rendering: scripted player (each(t) may move/turn him),
       // used to test the cannibal's behaviour fast and reproducibly.
@@ -404,6 +420,8 @@ async function game() {
           if(r==='stop')break;
           for(let i=0;i<2;i++)player.update(step/2,!cannibal.catching);
           dayNight.update(step);
+          camera.updateMatrixWorld();
+          flashlight.update(step,{bob:0,stride:0,motion:0});
           cannibal.update(step,player.ground,true);
           cannibal.frame(step);
           camera.updateMatrixWorld();
@@ -417,7 +435,7 @@ async function game() {
         const c=document.createElement('canvas');c.width=width;c.height=Math.round(width*canvas.height/canvas.width);
         c.getContext('2d').drawImage(canvas,0,0,c.width,c.height);return c.toDataURL('image/jpeg',quality);
       },
-      camera,cannibalModel:cannibal.root,preview:modelPreview,
+      camera,cannibalModel:cannibal.root,preview:modelPreview,torch:flashlight,beam:pipe.volume,gpu:()=>pipe.gpuTime,
     };
   }
 
@@ -436,6 +454,8 @@ async function game() {
     let movement;
     for(let i=0;i<steps;i++)movement=player.update(dt/steps,active&&!cannibal.catching);
     clock.value=elapsed;
+    flashlight.update(dt,{bob:movement?.bob??0,stride:movement?.stride??0,motion:calm.checked?.3:1});
+    cannibal.cues.swing=sword.swinging;
     cannibal.update(dt,player.ground,active);
     cannibal.frame(dt);
     if(cannibal.catching&&sword.visible)sword.show(false);
@@ -482,9 +502,16 @@ async function game() {
     streamLife.update(dt,coverage);
     air.update(coverage,preset,canvas);
     dayNight.update(dt);
+    // Eye adaptation to what the torch lights; mist in the beam thickens at night.
+    renderer.toneMappingExposure=dayNight.exposure*flashlight.adaptation;
+    pipe.volumeDensity=dayNight.night?.014:.004;
+    if(flashlight.on)renderer.shadowMap.needsUpdate=true;
     updateSky(camera,elapsed,preset.clouds);
     if(updateLight(coverage,preset.shadows))renderer.shadowMap.needsUpdate=true;
-    birds.update(dt,elapsed,camera,active,player.velocity.length(),sword.swinging);
+    birds.update(dt,elapsed,camera,active,player.velocity.length(),sword.swinging,cannibal.threat);
+    nightLevel+=((dayNight.night?1:0)-nightLevel)*(1-Math.exp(-dt/3));
+    nightSounds.update(dt,active?nightLevel:0,cannibal.threat,cannibal.presence);
+    audio.quietBirds=Math.max(nightLevel*.95,cannibal.presence);
     river.update(dt,player,coverage,active,preset);
     renderer.info.reset();
     probe.update(dt,coverage,sword.rig,preset);

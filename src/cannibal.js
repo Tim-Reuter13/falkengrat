@@ -1,8 +1,10 @@
 import * as T from 'three';
-import { altitude, clamp, mix, random, smooth, TAU } from './math.js';
+import { altitude, clamp, mix, random, riverBank, smooth, TAU } from './math.js';
 import { createSenses } from './cannibal/senses.js';
 import { createVoice } from './cannibal/voice.js';
 import { createBody } from './cannibal/body.js';
+import { createFollower, createNavGrid } from './cannibal/navgrid.js';
+import { createDirector } from './cannibal/director.js';
 
 // A hunter, not a jump-scare machine. He comes out at night, watches from cover first,
 // closes in from trunk to trunk while the player looks elsewhere, tests the player with a
@@ -15,10 +17,17 @@ import { createBody } from './cannibal/body.js';
 //   hunger    - grows through the night; makes him hurry and take risks
 // and he remembers: where he was seen, how often the player looks round, whether the
 // player runs or stands, whether a test made the player turn, whether he was wounded.
+// He does not know where the player is: he sees him in the dark only up close, a burning
+// torch from far away (its beam also shows where the player looks), and hears running,
+// wading and sword swings. Lost, he searches the last spot in tightening rings.
+// He walks a 1 m nav grid (A*), whose costs keep him out of the player's view cone, out of
+// the torch beam and out of open lines of sight - so he comes from the dark side.
+// A director (after Alien: Isolation) shapes one arc of menace per cycle: he may strike only
+// after suspense has built, and after the peak he is sent away to give the player air.
 const up = new T.Vector3(0, 1, 0);
 const angleBetween = (a, b) => Math.abs(((a - b + Math.PI) % TAU + TAU) % TAU - Math.PI);
 
-export function createCannibal({ scene, camera, collision, audio, trees, model, dagger, sounds, isNight, onCatch }) {
+export function createCannibal({ scene, camera, collision, audio, trees, model, dagger, sounds, isNight, onCatch, flashlight = null }) {
   const rand = random(90211);
   const pick = list => list[Math.floor(rand() * list.length)];
 
@@ -32,6 +41,7 @@ export function createCannibal({ scene, camera, collision, audio, trees, model, 
   body.traverse(o => {
     if (!o.isMesh) return;
     o.castShadow = true; o.receiveShadow = true; o.frustumCulled = false;
+    o.layers.enable(3);   // casts shadows in the torch light too
     const m = o.material;
     if (!m) return;
     m.roughness = Math.max(m.roughness ?? 1, .78);
@@ -63,7 +73,7 @@ export function createCannibal({ scene, camera, collision, audio, trees, model, 
 
   // ---------- bone dagger: held in the right hand, dropped on death
   const knife = dagger.scene;
-  knife.traverse(o => { if (o.isMesh) { o.castShadow = true; o.receiveShadow = true; o.frustumCulled = false; } });
+  knife.traverse(o => { if (o.isMesh) { o.castShadow = true; o.receiveShadow = true; o.frustumCulled = false; o.layers.enable(3); } });
   const knifeGrip = new T.Group();
   knifeGrip.add(knife);
   (hand || body).add(knifeGrip);
@@ -120,6 +130,30 @@ export function createCannibal({ scene, camera, collision, audio, trees, model, 
   newNight();
   const caution = () => 1 - traits.boldness;
 
+  // ---------- navigation and the director
+  const nav = createNavGrid(collision);
+  const navStats = { plans: 0, unreached: 0, buildMs: 0 };
+  const follow = createFollower(nav, { onReplan: (why, r) => { navStats.plans++; if (!r.reached) navStats.unreached++; } });
+  setTimeout(() => nav.buildAsync().then(ms => { navStats.buildMs = +ms.toFixed(1); }), 2500);
+  const director = createDirector(rand);
+
+  // ---------- what he knows of the player: only what he saw, heard or was told
+  const belief = { pos: new T.Vector3(), time: -1e9, facing: false, how: 'none', error: 0, yaw: 0, yawTime: -1e9 };
+  const cues = { swing: false };
+  const climbFrom = new T.Vector3();
+  let climbBlend = 1, climbReach = false, lastSwing = false, swingHeard = false, lastMode = 'still', stareCycle = -1, search = null, ambushing = false, litNow = 0;
+  const beliefAge = () => now - belief.time;
+  const knowsFacing = () => belief.facing && now - belief.time < 1.5;
+  // For planning he assumes the player still looks where he last saw him look (for a while).
+  const assumedYaw = () => now - belief.yawTime < 20 ? belief.yaw : null;
+  function learn(p, error, facing, how) {
+    const a = rand() * TAU, r = error * rand();
+    belief.pos.set(p.x + Math.cos(a) * r, 0, p.z + Math.sin(a) * r);
+    belief.pos.y = altitude(belief.pos.x, belief.pos.z);
+    belief.time = now; belief.facing = facing; belief.how = how; belief.error = error;
+    if (facing) { belief.yaw = player.yaw; belief.yawTime = now; }
+  }
+
   // ---------- state
   const tmp = new T.Vector3(), tmp2 = new T.Vector3(), eye = new T.Vector3(), fwd = new T.Vector3(), flatFwd = new T.Vector3();
   const target = new T.Vector3(), from = new T.Vector3(), to = new T.Vector3();
@@ -166,7 +200,12 @@ export function createCannibal({ scene, camera, collision, audio, trees, model, 
     player.sweep = player.sweep * Math.exp(-dt / 1.1) + angleBetween(player.yaw, player.lastYaw);
     player.lastYaw = player.yaw;
     player.lookCooldown -= dt;
-    if (player.sweep > 1.9 && player.lookCooldown <= 0) { memory.lookArounds++; player.lookCooldown = 2; player.sweep = 0; memory.lookRate += 1; }
+    if (player.sweep > 1.9 && player.lookCooldown <= 0) {
+      memory.lookArounds++; player.lookCooldown = 2; player.sweep = 0; memory.lookRate += 1;
+      if (flashlight?.on) director.habit('torchSweeps');
+    }
+    if (memory.playerMode === 'run' && lastMode !== 'run') director.habit('runs');
+    lastMode = memory.playerMode;
     memory.lookRate *= Math.exp(-dt / 60);
     memory.alert = clamp(memory.alert + (Math.min(1, memory.lookRate / 6) - memory.alert) * dt * .05, 0, 1);
     distance = Math.hypot(pos.x - player.pos.x, pos.z - player.pos.z);
@@ -182,103 +221,202 @@ export function createCannibal({ scene, camera, collision, audio, trees, model, 
     eye.copy(camera.position);
     head.getWorldPosition(points[0]); chestBone.getWorldPosition(points[1]); hipsBone.getWorldPosition(points[2]);
     shoulderL.getWorldPosition(points[3]); shoulderR.getWorldPosition(points[4]);
-    const s = senses.sight(eye, fwd, points, 1);
-    clarity = s.clarity; inView = s.inView; visible = s.visible;
-    if (blind || !root.visible) clarity = 0, inView = false, visible = 0;
+    // Unlit he is a shape within ~17 m at night; in the torch beam he is seen clearly.
+    const lux = flashlight?.on ? q => flashlight.illuminance(q) : null;
+    const s = senses.sight(eye, fwd, points, 1, isNight() ? 17 : null, lux);
+    clarity = s.clarity; inView = s.inView; visible = s.visible; litNow = s.lit;
+    if (blind || !root.visible) clarity = 0, inView = false, visible = 0, litNow = 0;
     hiddenNow = 1 - Math.max(...points.map(p => senses.lineOfSight(eye, p)));
+    sensePlayer();
   }
 
-  // ---------- movement on the ground with swerving and unsticking
-  const probe = new T.Vector3(), probeVel = new T.Vector3(), velocity = new T.Vector3(), anchor = new T.Vector3();
-  let steerOffset = 0, steerTimer = 0, ghost = 0, stuckTime = 0;
-  const offsets = [0, .45, -.45, .9, -.9, 1.35, -1.35, 1.8, -1.8];
-  function walkTo(x, z, speed, dt) {
-    const goal = Math.atan2(x - pos.x, z - pos.z);
+  // ---------- his senses. Eyes: in the dark he makes the player out within ~14 m, but a
+  // burning torch is a beacon from far away, and its beam shows where the player looks.
+  // Ears: running carries ~45 m, walking ~16 m, a sword swing ~30 m, wading half as far again.
+  const hisEye = new T.Vector3(), lean = new T.Vector3(), glow = new T.Vector3();
+  // From behind cover he leans out to look: his eye and a point half a metre to either side.
+  function canSee(target) {
+    headPos(hisEye);
+    if (senses.lineOfSight(hisEye, target) > .3) return true;
+    const dx = target.x - hisEye.x, dz = target.z - hisEye.z, L = Math.hypot(dx, dz) || 1;
+    for (const s of [.55, -.55]) {
+      lean.set(hisEye.x - dz / L * s, hisEye.y, hisEye.z + dx / L * s);
+      if (senses.lineOfSight(lean, target) > .3) return true;
+    }
+    return false;
+  }
+  function sensePlayer() {
+    if (!root.visible || blind) return;
+    const d = Math.hypot(player.pos.x - pos.x, player.pos.z - pos.z);
+    const lamp = !!flashlight?.on;
+    if (d < 14 || lamp && d < 80) {
+      if (canSee(lamp ? flashlight.origin : camera.position)) { learn(player.pos, 0, lamp || d < 9, lamp ? 'torch' : 'eyes'); swingHeard = false; return; }
+    }
+    // The lit patch where the beam lands, seen through the trees, gives the player away
+    // roughly - and which way he faces.
+    if (lamp && d < 60 && flashlight.hitDistance < 30) {
+      glow.copy(flashlight.origin).addScaledVector(flashlight.direction, flashlight.hitDistance - .3);
+      if (canSee(glow)) { learn(player.pos, 2 + d * .05, true, 'glow'); swingHeard = false; return; }
+    }
+    let ear = memory.playerMode === 'run' ? 45 : memory.playerMode === 'walk' ? 16 : 0;
+    if (swingHeard) ear = Math.max(ear, 30);
+    swingHeard = false;
+    if (riverBank(player.pos.x, player.pos.z) < 0 && memory.playerMode !== 'still') ear *= 1.5;
+    if (d < ear) learn(player.pos, d * .12, false, 'ears');
+  }
+
+  // ---------- movement: A* over the nav grid with exposure costs, then steering along the path
+  const velocity = new T.Vector3();
+  function walkTo(x, z, speed, dt, mode = 'stealth') {
+    const close = mode === 'direct' ? .35 : .5;
+    if (Math.hypot(x - pos.x, z - pos.z) < close) return true;
+    const wp = follow.next(pos, x, z, () => mode === 'direct' ? null : exposureCost(mode), now, dt, mode);
+    if (!wp) return true;
+    // Cannot get there (stuck again and again): this is as close as it gets - the caller
+    // treats it as arrived and decides anew, instead of pushing against the rock.
+    if (follow.unreachable > 1) { navStats.gaveUp = (navStats.gaveUp ?? 0) + 1; badSpots.push(new T.Vector3(x, 0, z)); if (badSpots.length > 8) badSpots.shift(); follow.reset(); return true; }
+    const goal = Math.atan2(wp[0] - pos.x, wp[1] - pos.z);
+    targetHeading = goal;
+    // A sharp corner: slow down and turn instead of drifting into the trunk.
+    const turn = angleBetween(heading, goal);
     const left = Math.hypot(x - pos.x, z - pos.z);
-    speed = Math.min(speed, left / Math.max(dt, 1e-3));
-    steerTimer -= dt;
-    if (steerTimer <= 0) {
-      steerTimer = .3;
-      let best = steerOffset, bestGain = -1;
-      for (const o of offsets) {
-        const h = goal + o;
-        probe.copy(pos);
-        probeVel.set(Math.sin(h) * 2.5, 0, Math.cos(h) * 2.5);
-        collision.move(probe, probeVel, .35, true);
-        const moved = Math.hypot(probe.x - pos.x, probe.z - pos.z);
-        const climb = altitude(probe.x, probe.z) - pos.y;
-        const gain = moved * Math.cos(o) - Math.max(0, climb - moved * .9) * 2 - Math.abs(o - steerOffset) * .05;
-        if (gain > bestGain) { bestGain = gain; best = o; }
-        if (o === 0 && moved > .6) break;
-      }
-      steerOffset = best;
-    }
-    targetHeading = goal + steerOffset;
-    velocity.set(Math.sin(heading) * speed, 0, Math.cos(heading) * speed);
-    if (ghost > 0) { ghost -= dt; pos.addScaledVector(velocity, dt); }
-    else collision.move(pos, velocity, dt, true);
+    const sp = Math.min(speed, left / Math.max(dt, 1e-3)) * (turn > 1.3 ? .3 : turn > .7 ? .65 : 1);
+    velocity.set(Math.sin(heading) * sp, 0, Math.cos(heading) * sp);
+    const bx = pos.x, bz = pos.z;
+    collision.move(pos, velocity, dt, true);
+    // Pushed out of a rock: at most a little faster than he walks (no visible jolt).
+    const mx = pos.x - bx, mz = pos.z - bz, moved = Math.hypot(mx, mz), lim = sp * dt * 1.6 + .015;
+    if (moved > lim) { pos.x = bx + mx / moved * lim; pos.z = bz + mz / moved * lim; }
     pos.y = altitude(pos.x, pos.z);
-    stuckTime += dt;
-    if (stuckTime > .5) {
-      if (speed > .3 && Math.hypot(pos.x - anchor.x, pos.z - anchor.z) < speed * stuckTime * .2) { ghost = .6; steerTimer = 0; }
-      anchor.copy(pos); stuckTime = 0;
-    }
     rig.mode = 'ground';
     rig.gait = speed > 3 ? 'run' : 'stalk';
-    rig.speed = speed;
-    return left < .35;
+    rig.speed = sp;
+    trackSide(dt);
+    return Math.hypot(x - pos.x, z - pos.z) < close;
+  }
+  // Exposure for the path search: the player's view cone, the torch beam and open lines of
+  // sight from where he believes the player's eye is (terrain and solid cover, memoised on a
+  // 2 m lattice per search), and a wide berth round the player. Only what he knows counts:
+  // without a fresh look at the player he cannot tell where the player is facing.
+  const costEye = new T.Vector3(), costP = new T.Vector3(), lampO = new T.Vector3(), lampD = new T.Vector3();
+  function exposureCost(mode) {
+    const w = mode === 'stealth' ? 1 : mode === 'flee' ? .6 : .35;
+    const bx = belief.pos.x, bz = belief.pos.z;
+    const yaw = assumedYaw(), facing = yaw !== null;
+    const lamp = !!flashlight?.on && facing && now - belief.yawTime < 4;
+    if (lamp) { lampO.copy(flashlight.origin); lampD.copy(flashlight.direction); }
+    const cosBeam = lamp ? Math.cos(Math.min(1.2, flashlight.halfAngle * 1.35 + .05)) : 1;
+    costEye.set(bx, altitude(bx, bz) + 1.6, bz);
+    const memo = new Map();
+    return (x, z) => {
+      const dx = x - bx, dz = z - bz, d = Math.hypot(dx, dz);
+      let c = d < 7 ? (7 - d) * (7 - d) * .9 : 0;   // a wide berth round the player (43 per cell at his feet)
+      if (d > 48 || !facing) return c * w;
+      const off = angleBetween(Math.atan2(dx, dz), yaw);
+      let lit = 0;
+      if (lamp) {
+        costP.set(x - lampO.x, altitude(x, z) + .8 - lampO.y, z - lampO.z);
+        const L = costP.length();
+        if (L < 45 && costP.dot(lampD) / L > cosBeam) lit = 1;
+      }
+      if (off > 1.05 && !lit) return c * w;
+      const key = Math.round(x / 2) * 4096 + Math.round(z / 2);
+      let open = memo.get(key);
+      if (open === undefined) {
+        costP.set(x, altitude(x, z) + .7, z);
+        const hit = senses.terrainBlocks(costEye, costP) ? true : collision.blocked(costEye, costP);
+        open = hit === true || hit && hit.distance < costEye.distanceTo(costP) - .3 ? 0 : 1;
+        memo.set(key, open);
+      }
+      if (open) c += (off < 1.05 ? (1.05 - off) * 8 * (1 - d / 48) + 1.5 : 0) + lit * 22;
+      return c * w;
+    };
+  }
+  // Test record: from which side he closes in (0 = in front of the lamp, PI = straight behind).
+  const darkSide = { time: 0, angle: 0, inCone: 0, inBeam: 0 };
+  function trackSide(dt) {
+    if (state !== 'approach' && state !== 'reposition' && state !== 'search') return;
+    const lampYaw = flashlight?.on ? Math.atan2(flashlight.direction.x, flashlight.direction.z) : player.yaw;
+    const a = angleBetween(bearingFromPlayer, lampYaw);
+    darkSide.time += dt; darkSide.angle += a * dt;
+    if (a < .6 && distance < 40) darkSide.inCone += dt;
+    if (litNow > .03) darkSide.inBeam += dt;
   }
   function crouch(gait = 'perch') { rig.mode = 'ground'; rig.gait = gait; rig.speed = 0; }
 
   // ---------- cover planning
-  function sideOf(x, z) { return Math.atan2(x - player.pos.x, z - player.pos.z); }
+  function sideOf(x, z) { return Math.atan2(x - belief.pos.x, z - belief.pos.z); }
   function planCover(kind) {
-    eye.copy(camera.position);
-    const ppos = player.pos, R = distance;
-    let centre, reach, score, need = .85, towards = false;
+    // He plans from what he believes: the player's spot as last seen or heard, and the way
+    // the player faces only when he has just seen it (a torch beam gives it away from afar).
+    const ppos = belief.pos, R = Math.hypot(pos.x - ppos.x, pos.z - ppos.z);
+    if (now - belief.time < 1.5) eye.copy(camera.position); else eye.set(ppos.x, ppos.y + 1.6, ppos.z);
+    const lookYaw = assumedYaw();
+    const lamp = !!flashlight?.on && lookYaw !== null;
+    const inLook = (c, lim) => lookYaw !== null && angleBetween(sideOf(c.x, c.z), lookYaw) < lim;
+    let centre, reach, score, need = .85, towards = false, ambush = false;
     if (kind === 'evade') {
       // Nearest place out of sight, never towards the player, never across his view.
       centre = pos; reach = 9;
       score = c => {
         const travel = Math.hypot(c.x - pos.x, c.z - pos.z);
         const d = Math.hypot(c.x - ppos.x, c.z - ppos.z);
-        return travel + (d < R - 1 ? 8 : 0) + (angleBetween(sideOf(c.x, c.z), player.yaw) < .5 ? 4 : 0);
+        return travel + (d < R - 1 ? 8 : 0) + (inLook(c, .5) ? (lamp ? 9 : 4) : 0);
       };
     } else if (kind === 'retreat') {
       centre = tmp.set(pos.x + (pos.x - ppos.x) / Math.max(R, 1) * 7, 0, pos.z + (pos.z - ppos.z) / Math.max(R, 1) * 7).clone(); reach = 8;
-      score = c => { const d = Math.hypot(c.x - ppos.x, c.z - ppos.z); return Math.abs(d - mix(18, 26, caution())) + Math.hypot(c.x - pos.x, c.z - pos.z) * .3; };
+      score = c => { const d = Math.hypot(c.x - ppos.x, c.z - ppos.z); return Math.abs(d - mix(18, 26, caution())) + Math.hypot(c.x - pos.x, c.z - pos.z) * .3 + (inLook(c, .45) ? 6 : 0); };
     } else if (kind === 'vantage') {
-      // A new side: at least 80 degrees round from where he was last seen.
-      const avoid = memory.lastSeenAt ? sideOf(memory.lastSeenAt.x, memory.lastSeenAt.z) : bearingFromPlayer;
+      // A new side: at least 80 degrees round from where he was last seen, and with a torch
+      // burning, on the dark side of it.
+      const avoid = memory.lastSeenAt ? sideOf(memory.lastSeenAt.x, memory.lastSeenAt.z) : sideOf(pos.x, pos.z);
       const dirSign = rand() < .5 ? 1 : -1;
-      const b = avoid + dirSign * mix(1.4, 2.4, rand());
+      const b = lamp && rand() < .7 ? lookYaw + Math.PI + (rand() - .5) * 1.6 : avoid + dirSign * mix(1.4, 2.4, rand());
       const r = mix(26, 42, caution()) * (1 - traits.hunger * .2);
       centre = new T.Vector3(ppos.x + Math.sin(b) * r, 0, ppos.z + Math.cos(b) * r); reach = 9;
       score = c => {
         const d = Math.hypot(c.x - ppos.x, c.z - ppos.z);
         const seenSide = memory.lastSeenAt ? Math.hypot(c.x - memory.lastSeenAt.x, c.z - memory.lastSeenAt.z) : 99;
-        return Math.abs(d - r) + (seenSide < 10 ? 15 : 0) + (angleBetween(sideOf(c.x, c.z), player.yaw) < .9 ? 6 : 0);
+        return Math.abs(d - r) + (seenSide < 10 ? 15 : 0) + (inLook(c, .9) ? (lamp ? 16 : 6) : 0);
       };
       need = .62; towards = true;
     } else {
-      // Next cover towards the strike point behind the player.
-      const sx = ppos.x - flatFwd.x * 2.4, sz = ppos.z - flatFwd.z * 2.4;
+      // Next cover towards the strike point: behind the player when he knows where the player
+      // faces; ahead of a hurrying player once he has learnt that the player runs (ambush);
+      // otherwise simply towards where he believes the player is.
+      let sx = ppos.x, sz = ppos.z;
+      const speed = Math.hypot(player.vel.x, player.vel.z);
+      if (lookYaw !== null && director.state.unlocks.ambushAhead && speed > 1.6 && rand() < .5) {
+        const vx = player.vel.x / speed, vz = player.vel.z / speed, side = rand() < .5 ? 1 : -1;
+        sx = ppos.x + vx * 14 - vz * 3.5 * side; sz = ppos.z + vz * 14 + vx * 3.5 * side; ambush = true;
+      } else if (lookYaw !== null) {
+        // In front of the player (or to the side) he first circles round through the dark at a
+        // safe radius; only from behind does he close in on the strike point.
+        const mySide = sideOf(pos.x, pos.z), off = angleBetween(mySide, lookYaw);
+        if (off < 1.95 && R > 6) {
+          const turnSign = Math.sin(mySide - lookYaw) >= 0 ? 1 : -1;
+          const a = lookYaw + turnSign * 2.5, rr = clamp(R, 10, 20);
+          sx = ppos.x + Math.sin(a) * rr; sz = ppos.z + Math.cos(a) * rr;
+        } else { sx = ppos.x - Math.sin(lookYaw) * 2.4; sz = ppos.z - Math.cos(lookYaw) * 2.4; }
+      }
       const toS = Math.hypot(sx - pos.x, sz - pos.z);
       const step = Math.min(toS, mix(5, 11, traits.boldness) * (1 + noise * .4) * (1 + traits.hunger * .3));
       centre = new T.Vector3(pos.x + (sx - pos.x) / Math.max(toS, .1) * step, 0, pos.z + (sz - pos.z) / Math.max(toS, .1) * step); reach = 7;
       score = c => {
         const toStrike = Math.hypot(c.x - sx, c.z - sz);
         const d = Math.hypot(c.x - ppos.x, c.z - ppos.z);
-        const inCone = angleBetween(sideOf(c.x, c.z), player.yaw) < 1.0 && d < 32;
+        const inCone = inLook(c, 1.0) && d < 32;
         const seenSide = memory.lastSeenAt && now - memory.lastSeenTime < 90 ? Math.hypot(c.x - memory.lastSeenAt.x, c.z - memory.lastSeenAt.z) : 99;
-        return toStrike + (inCone ? 20 : 0) + (seenSide < 6 ? 6 : 0) + (d < 3.2 ? 30 : 0);
+        return toStrike + (inCone ? (lamp ? 30 : 20) : 0) + (seenSide < 6 ? 6 : 0) + (d < 3.2 ? 30 : 0);
       };
       need = .8;
     }
     const found = senses.findCover({ eye, from: pos, centre, reach, score, need, towards, avoid: badSpots });
     // Open ground only when the player clearly looks the other way (approach) - never to hide.
-    if (found && found.hidden < need * .6 && !(kind === 'approach' && behind() > 2.2)) return null;
-    if (found) stats.covers++;
+    if (found && found.hidden < need * .6 && !(kind === 'approach' && lookYaw !== null && behind() > 2.2)) return null;
+    // A "next" cover that is where he already crouches is no progress.
+    if (found && kind === 'approach' && Math.hypot(found.x - pos.x, found.z - pos.z) < 1.2) return null;
+    if (found) { stats.covers++; found.ambush = ambush; }
     return found;
   }
 
@@ -294,6 +432,7 @@ export function createCannibal({ scene, camera, collision, audio, trees, model, 
     rig.tree = t; rig.mode = 'climb';
     rig.climbAngle = Math.atan2(pos.x - t.x, pos.z - t.z);
     rig.climbHeight = Math.max(0, pos.y - t.y);
+    climbReach = true;   // first the last steps to the bark
     setState('climb', 'to the crown');
   }
   function placeOnTrunk(t, angle, height) {
@@ -353,12 +492,16 @@ export function createCannibal({ scene, camera, collision, audio, trees, model, 
   // ---------- spawning: he arrives somewhere out of sight
   function spawn() {
     memory.lastSeenAt = null;
+    // The director knows where the player is and places him out of sight in that area;
+    // from then on he has to find the player by himself.
+    learn(player.pos, 0, false, 'director');
     const found = planCover('vantage');
     if (!found || found.hidden < .7) return false;
     pos.set(found.x, found.y, found.z);
     faceTo(player.pos.x, player.pos.z, true);
     health = 2; seenMeter = 0; tree = null;
-    show(true); knifeGrip.visible = true;
+    show(true); knifeGrip.visible = true; follow.reset();
+    belief.time = now - 3;
     beginObserve('arrived', found.cover);
     return true;
   }
@@ -369,24 +512,30 @@ export function createCannibal({ scene, camera, collision, audio, trees, model, 
     // At a thick trunk he stands behind it and leans out to look (the curious more often);
     // elsewhere he lurks in a crouch, one hand on the ground (keyframe clip "watch").
     peekCover = bodyRig.actions.peek && cover?.kind === 'tree' && cover.r >= .27 && rand() < .45 + traits.curiosity * .45 ? cover : null;
-    if (peekCover) placeForPeek();
+    peekStep = null;
+    if (peekCover) placeForPeek(!root.visible || why === 'test' || why === 'arrived');
     setState('observe', why);
   }
   // The peek clip leans out to his right, so he stands centred behind a trunk wider than his shoulders:
   // upright he is covered, leaning out his head clears the bark.
-  function placeForPeek() {
+  // Out of sight (spawn, tests) he is put there; otherwise he takes the last step(s) to it.
+  let peekStep = null;
+  function placeForPeek(instant = true) {
     const c = peekCover, dx = c.x - player.pos.x, dz = c.z - player.pos.z, L = Math.hypot(dx, dz) || 1;
     const bx = dx / L, bz = dz / L, lx = -bz, lz = bx;   // b: player -> trunk; l: his left while facing the player
     const back = c.r + .3, side = 0;   // centred: covered upright, the lean takes the head clear
-    pos.set(c.x + bx * back + lx * side, 0, c.z + bz * back + lz * side);
-    pos.y = altitude(pos.x, pos.z);
+    const x = c.x + bx * back + lx * side, z = c.z + bz * back + lz * side;
+    if (!instant && Math.hypot(x - pos.x, z - pos.z) > .05) { peekStep = { x, z }; return; }
+    pos.set(x, altitude(x, z), z);
     faceTo(player.pos.x, player.pos.z, true);
   }
 
   // ---------- being seen: break the line of sight, never vanish
   function onSeen() {
     const fresh = now - memory.lastSeenTime > 4;
+    learn(player.pos, 0, true, 'eyes');
     if (fresh) {
+      director.encounter();
       memory.sightings++;
       traits.boldness = clamp(traits.boldness - .16 * (1 + Math.min(2, memory.sightings) * .25), .05, .95);
     }
@@ -394,6 +543,11 @@ export function createCannibal({ scene, camera, collision, audio, trees, model, 
     seenMeter = 0; seenAtTime = now; stats.evades++;
     voice.play(pick(['kannibale-knurren-2', 'kannibale-atem-2']), headPos(new T.Vector3()), { volume: .7, rate: 1.1 });
     if (state === 'strike' && (traits.boldness > .7 || distance < 3)) return;   // committed
+    // Learnt that the player keeps sweeping the torch round: once per cycle he does not run
+    // but stays and stares back from the dark, then melts away.
+    if (fresh && director.state.unlocks.stare && stareCycle !== director.state.peaks && distance > 9 && distance < 30 && !tree && rand() < .6) {
+      stareCycle = director.state.peaks; setState('stare', 'stares back'); return;
+    }
     // Seen again and again: too risky tonight for a while. He leaves (out of sight) and comes back later.
     if (fresh && memory.sightings % 5 === 0) { cooldown = mix(90, 150, rand()); setState('withdraw', 'too risky'); return; }
     if (tree && (state === 'crown' || state === 'climb')) {
@@ -470,11 +624,13 @@ export function createCannibal({ scene, camera, collision, audio, trees, model, 
   // ---------- breathing, growls, whispers
   function breathe() {
     if (now < breathAt || distance > 16 || !root.visible) return;
-    const quiet = state === 'hide' || state === 'wait' && caution() > .6;
+    // Sparse sounds: closing in, hiding, searching and right before the attack he makes none.
+    // The silence (the crickets stop too) is the warning; the growl comes with the strike.
+    const quiet = ['hide', 'wait', 'approach', 'search', 'strike', 'stare', 'reposition'].includes(state) || state === 'observe' && distance < 11;
     if (quiet) { breathAt = now + 2; return; }
-    const fast = state === 'strike' || state === 'rage' || state === 'evade';
-    voice.play(variant('kannibale-atem', 4), headPos, { volume: fast ? .75 : .45, rate: fast ? 1.15 : mix(.9, 1, rand()) });
-    breathAt = now + (fast ? mix(.7, 1.1, rand()) : mix(2.8, 4.6, rand()));
+    const fast = state === 'rage' || state === 'evade' || state === 'retreat';
+    voice.play(variant('kannibale-atem', 4), headPos, { volume: fast ? .75 : .4, rate: fast ? 1.15 : mix(.9, 1, rand()) });
+    breathAt = now + (fast ? mix(.7, 1.1, rand()) : mix(5, 9, rand()));
     if (state === 'observe' && traits.boldness > .65 && distance < 15 && rand() < .15)
       voice.play('kannibale-fluestern-1', headPos, { volume: .5 });
   }
@@ -512,7 +668,7 @@ export function createCannibal({ scene, camera, collision, audio, trees, model, 
     voice.play('kannibale-tod-kurz', headPos, { volume: 1.1, rate: 1.1 });
     jump = null; tree = null;
     // Rage or retreat, depending on who he is tonight.
-    if (traits.boldness * .6 + traits.hunger * .4 + rand() * .25 > .62) {
+    if (!director.state.unlocks.hitAndRun && traits.boldness * .6 + traits.hunger * .4 + rand() * .25 > .62) {
       voice.play('kannibale-knurren-1', headPos, { volume: 1.2, rate: .95 });
       setState('rage', 'wounded');
     } else {
@@ -554,6 +710,26 @@ export function createCannibal({ scene, camera, collision, audio, trees, model, 
     }
   }
 
+  // ---------- searching: the last spot first, then points round it in tightening rings,
+  // crouching to listen at each. Dark, covered points first. The director may whisper a
+  // rough area when he has lost the player for long; otherwise he gives up and leaves.
+  function startSearch(why) {
+    search = { centre: belief.pos.clone(), step: 0, listen: 0, at: null, t: 0 };
+    plan = null; ambushing = false;
+    setState('search', why);
+  }
+  function nextSearchPoint() {
+    const r = search.step === 0 ? 0 : mix(13, 4, Math.min(1, search.step / 6));
+    let best = null, bestScore = Infinity;
+    for (let i = 0; i < (r ? 12 : 1); i++) {
+      const a = rand() * TAU, x = search.centre.x + Math.sin(a) * r, z = search.centre.z + Math.cos(a) * r;
+      if (r && nav.blocked(x, z)) continue;
+      const score = Math.hypot(x - pos.x, z - pos.z) * .3 + (nav.nearCover(x, z) ? 0 : 4) + rand() * 3;
+      if (score < bestScore) { bestScore = score; best = [x, z]; }
+    }
+    search.at = best ?? [search.centre.x, search.centre.z]; search.step++; search.listen = 0; search.t = 0;
+  }
+
   // ---------- the hunt
   function think(dt) {
     const night = isNight();
@@ -562,8 +738,16 @@ export function createCannibal({ scene, camera, collision, audio, trees, model, 
     // Unseen for long, he grows bolder, but every sighting tonight lowers the ceiling.
     const ceiling = clamp(.95 - memory.sightings * .12 - memory.wounds * .15, .3, .95);
     if (!inView && root.visible && memory.unseenFor > 8) traits.boldness = Math.min(ceiling, traits.boldness + dt * .0045);
+    // The director's pause after the peak: he is sent away to give the player air.
+    if (director.backOff && !['withdraw', 'away', 'dead', 'catch', 'jump', 'strike', 'rage', 'climb', 'crown', 'evade'].includes(state)) {
+      cooldown = Math.max(cooldown, director.state.relaxFor - director.state.phaseTime); plan = null;
+      setState('withdraw', 'director: pause');
+    } else if (['observe', 'approach', 'wait', 'reposition', 'hide'].includes(state) && stateTime > 2 && beliefAge() > (state === 'approach' || state === 'reposition' ? 8 : 14)) {
+      // Lost him: nothing seen or heard for a while.
+      startSearch('lost him');
+    }
     // Seen?
-    if (!['catch', 'dead', 'withdraw', 'jump'].includes(state)) {
+    if (!['catch', 'dead', 'withdraw', 'jump', 'stare'].includes(state)) {
       // While he is already breaking the line of sight the meter rests; a new sighting
       // counts only once he has settled somewhere.
       if (state === 'evade') seenMeter = 0;
@@ -578,7 +762,16 @@ export function createCannibal({ scene, camera, collision, audio, trees, model, 
       case 'observe': {
         // Watches from cover: still, staring, breathing slowly. Peeking round a trunk he ducks
         // back into a squat when the player faces his way (unless he is very bold).
-        faceTo(player.pos.x, player.pos.z);
+        if (peekStep) {
+          // A short careful step to the middle of the trunk's shadow.
+          const gx = peekStep.x - pos.x, gz = peekStep.z - pos.z, gap = Math.hypot(gx, gz);
+          const step = Math.min(gap, .9 * dt);
+          pos.x += gx / gap * step; pos.z += gz / gap * step; pos.y = altitude(pos.x, pos.z);
+          rig.mode = 'ground'; rig.gait = 'stalk'; rig.speed = .9;
+          if (gap - step < .02) peekStep = null;
+          break;
+        }
+        faceTo(belief.pos.x, belief.pos.z);
         if (peekCover) crouch(watching && traits.boldness < .7 ? 'perch' : 'peek');
         else crouch(bodyRig.actions.watch ? 'watch' : 'perch');
         rig.lookWeight = 1;
@@ -590,7 +783,7 @@ export function createCannibal({ scene, camera, collision, audio, trees, model, 
           const t = treeNear(pos.x, pos.z, 2.6);
           if (t) { faceTo(t.x, t.z); startClimb(t); break; }
         }
-        if (observed >= need && !watching && !test) { plan = null; setState('approach', 'patience spent'); }
+        if (observed >= need && !(knowsFacing() && watching) && !test) { plan = null; setState('approach', 'patience spent'); }
         // The player keeps facing his way: instead of waiting forever he circles round to a flank.
         else if (observed >= need + 10 && watching && !test) { plan = planCover('vantage'); if (plan) setState('reposition', 'circles round'); else observed = need; }
         break;
@@ -598,14 +791,26 @@ export function createCannibal({ scene, camera, collision, audio, trees, model, 
       case 'climb': {
         // Procedural climb: the root rises, limbs hold the bark.
         const t = tree;
+        if (climbReach) {
+          // Walk the last metre to the bark on his side of the trunk, then take hold.
+          const r = senses.trunkRadius(t, 0) + .4;
+          const gx = t.x + Math.sin(rig.climbAngle) * r, gz = t.z + Math.cos(rig.climbAngle) * r;
+          const near = Math.hypot(gx - pos.x, gz - pos.z) < .3 || walkTo(gx, gz, 1.2, dt, 'stealth');
+          if (!near && stateTime < 5) break;
+          climbReach = false; rig.climbHeight = Math.max(0, pos.y - t.y);
+          climbFrom.copy(pos); climbBlend = 0;
+        }
         const top = perchHeight(t);
         const speed = watching ? .35 : mix(.7, 1.1, traits.boldness);
         rig.mode = 'climb'; rig.speed = speed;
         rig.climbHeight = Math.min(top, rig.climbHeight + speed * dt);
         placeOnTrunk(t, rig.climbAngle, rig.climbHeight);
+        // Takes hold of the bark over a third of a second instead of snapping onto it.
+        if (climbBlend < 1) { climbBlend = Math.min(1, climbBlend + dt / .35); pos.lerpVectors(climbFrom, tmp2.copy(pos), smooth(0, 1, climbBlend)); }
         rig.lookWeight = .3;
         if (rig.climbHeight >= top - .01) {
-          crownSpot(t, player.pos, pos);
+          // Perch on the side he climbed (no slide round the trunk); he turns to the player.
+          crownSpot(t, tmp.set(t.x + Math.sin(rig.climbAngle) * 9, 0, t.z + Math.cos(rig.climbAngle) * 9), pos);
           setState('crown', 'perched');
         }
         break;
@@ -620,7 +825,7 @@ export function createCannibal({ scene, camera, collision, audio, trees, model, 
         if (stateTime < mix(.8, 2.5, caution())) break;
         if (watching && inView) break;
         const flat = distance;
-        if (flat < 7.5 && behind() > 1.9 && memory.unseenFor > 1 && observed > need * .5) {
+        if (flat < 7.5 && behind() > 1.9 && memory.unseenFor > 1 && observed > need * .5 && director.mayStrike(nightTime)) {
           tmp.set(pos.x - player.pos.x, 0, pos.z - player.pos.z).normalize();
           const at = new T.Vector3(player.pos.x + tmp.x * .8, player.pos.y, player.pos.z + tmp.z * .8);
           stats.strikes++;
@@ -640,7 +845,7 @@ export function createCannibal({ scene, camera, collision, audio, trees, model, 
       case 'approach': {
         updateTest(dt);
         // Strike from behind when close, unseen and out of patience.
-        if (distance < 6.5 && behind() > 1.95 && memory.unseenFor > 1 && !watching) {
+        if (distance < 6.5 && behind() > 1.95 && memory.unseenFor > 1 && !watching && knowsFacing() && director.mayStrike(nightTime)) {
           stats.strikes++;
           voice.play('kannibale-knurren-3', headPos, { volume: .5, rate: .9 });
           setState('strike', 'behind him');
@@ -648,7 +853,7 @@ export function createCannibal({ scene, camera, collision, audio, trees, model, 
         }
         if (!plan && now >= replanAt) {
           plan = planCover('approach');
-          if (!plan && behind() > 1.9) {
+          if (!plan && knowsFacing() && behind() > 1.9) {
             // No cover on the way: creep a few metres over open ground while his back is turned.
             const sx = player.pos.x - flatFwd.x * 2.4, sz = player.pos.z - flatFwd.z * 2.4;
             const d = Math.hypot(sx - pos.x, sz - pos.z), step = Math.min(d, mix(3, 6, traits.boldness));
@@ -665,7 +870,10 @@ export function createCannibal({ scene, camera, collision, audio, trees, model, 
         }
         // Moves only while the player looks elsewhere; his noise covers faster moves.
         const masked = noise >= .45;
-        if (watching && !masked) {
+        // He freezes when the player faces his way and he could be made out: close, in the
+        // beam or already half visible. Further off in the dark he keeps creeping.
+        const exposed = litNow > .01 || clarity > .15 || distance < 10;
+        if (knowsFacing() && watching && !masked && exposed) {
           if (inView) stats.freezes += rig.speed > 0 ? 1 : 0;
           crouch(rig.gait === 'stalk' ? 'stalk' : 'perch');
           rig.lookWeight = 1;
@@ -680,8 +888,9 @@ export function createCannibal({ scene, camera, collision, audio, trees, model, 
         // The keyframe stalk is a slow, heavy creep (its feet slide ~0.35 m/s): he creeps at 0.6-0.95 m/s and dashes between covers.
         const speed = (dash ? 4.2 : mix(.6, .95, traits.boldness) * (masked ? 1.5 : 1) * (1 + traits.hunger * .25));
         rig.lookWeight = .55;
-        if (walkTo(plan.x, plan.z, speed, dt)) {
+        if (walkTo(plan.x, plan.z, speed, dt, 'stealth')) {
           waitFor = mix(.8, 4.5, caution()) * (1 + memory.alert * .8) * (1.2 - traits.hunger * .5);
+          ambushing = !!plan.ambush;
           plan = null;
           setState('wait', 'at cover');
           break;
@@ -689,7 +898,7 @@ export function createCannibal({ scene, camera, collision, audio, trees, model, 
         // A cover he cannot reach (wedged against a rock or trunk): give it up and look again.
         if (plan !== planOf) { planOf = plan; planAge = 0; planGap = gap; }
         planAge += dt;
-        if (planAge > 4 + planGap / Math.max(speed, .5) * 2) { badSpots.push(new T.Vector3(plan.x, 0, plan.z)); if (badSpots.length > 8) badSpots.shift(); plan = null; }
+        if (follow.unreachable > 1 || planAge > 4 + planGap / Math.max(speed, .5) * 2) { badSpots.push(new T.Vector3(plan.x, 0, plan.z)); if (badSpots.length > 8) badSpots.shift(); plan = null; }
         break;
       }
       case 'wait': {
@@ -697,6 +906,13 @@ export function createCannibal({ scene, camera, collision, audio, trees, model, 
         crouch('perch');
         rig.lookWeight = 0;
         updateTest(dt);
+        // Lying in wait ahead of a hurrying player: let him pass, then strike from behind.
+        if (ambushing) {
+          faceTo(belief.pos.x, belief.pos.z); rig.lookWeight = 1;
+          if (distance < 5 && behind() > 1.5 && knowsFacing() && director.mayStrike(nightTime)) { stats.strikes++; voice.play('kannibale-knurren-3', headPos, { volume: .5, rate: .9 }); ambushing = false; setState('strike', 'ambush'); break; }
+          if (stateTime > waitFor * 4 + 6) { ambushing = false; setState('approach', 'ambush over'); }
+          break;
+        }
         if (approachingPlayer > .8 && distance < 15) { plan = planCover('retreat'); stats.retreats++; setState('retreat', 'player comes'); break; }
         if (stateTime > waitFor) setState('approach', 'next cover');
         break;
@@ -704,24 +920,24 @@ export function createCannibal({ scene, camera, collision, audio, trees, model, 
       case 'strike': {
         rig.lookWeight = .6;
         const speed = 5.6 + traits.hunger;
-        walkTo(player.pos.x, player.pos.z, speed, dt);
+        walkTo(player.pos.x, player.pos.z, speed, dt, 'direct');
         if (distance < 1.7) { startCatch(); break; }
         if (stateTime > 4.5) { plan = null; setState('approach', 'strike failed'); }
         break;
       }
       case 'rage': {
         rig.lookWeight = .6;
-        walkTo(player.pos.x, player.pos.z, 6.2, dt);
+        walkTo(player.pos.x, player.pos.z, 6.2, dt, 'direct');
         if (distance < 1.7) startCatch();
         break;
       }
       case 'evade': {
         if (cornered()) break;
         if (!plan) plan = planCover(distance < 9 || approachingPlayer > .8 ? 'retreat' : 'evade');
-        if (!plan) { walkTo(pos.x + Math.sin(bearingFromPlayer + 1.3) * 6, pos.z + Math.cos(bearingFromPlayer + 1.3) * 6, 4.5, dt); if (hiddenNow > .8) setState('hide', 'out of sight'); break; }
+        if (!plan) { walkTo(pos.x + Math.sin(bearingFromPlayer + 1.3) * 6, pos.z + Math.cos(bearingFromPlayer + 1.3) * 6, 4.5, dt, 'flee'); if (hiddenNow > .8) setState('hide', 'out of sight'); break; }
         const gap = Math.hypot(plan.x - pos.x, plan.z - pos.z);
         rig.lookWeight = .2;
-        const arrived = walkTo(plan.x, plan.z, gap > 2.5 ? 5.2 : 2.6, dt);
+        const arrived = walkTo(plan.x, plan.z, gap > 2.5 ? 5.2 : 2.6, dt, 'flee');
         if (arrived) faceAway();
         if (arrived && hiddenNow < .8 && checkAt === 0) checkAt = now + .7;
         if (checkAt && now > checkAt && hiddenNow < .8) { checkAt = 0; badSpots.push(new T.Vector3(plan.x, 0, plan.z)); if (badSpots.length > 8) badSpots.shift(); plan = planCover('evade'); break; }
@@ -752,14 +968,14 @@ export function createCannibal({ scene, camera, collision, audio, trees, model, 
         if (!plan) plan = planCover('retreat');
         if (!plan) { setState('hide', 'nowhere better'); break; }
         rig.lookWeight = .4;
-        if (walkTo(plan.x, plan.z, distance < 10 ? 4.9 : 3.4, dt)) { plan = null; hideFor = mix(3, 7, caution()); setState('hide', 'backed off'); }
+        if (walkTo(plan.x, plan.z, distance < 10 ? 4.9 : 3.4, dt, 'flee')) { plan = null; hideFor = mix(3, 7, caution()); setState('hide', 'backed off'); }
         if (stateTime > 6) plan = null;
         break;
       }
       case 'reposition': {
         if (!plan) { plan = planCover('vantage'); if (!plan) { setState('hide', 'no vantage'); hideFor = 3; break; } }
         if (stateTime > 25) { plan = null; beginObserve('gave up moving'); break; }
-        if (watching && inView) {
+        if (watching && inView && (clarity > .15 || litNow > .01)) {
           crouch('stalk');
           // Caught in the open while moving round: get out of sight first.
           blockedFor += dt;
@@ -769,18 +985,55 @@ export function createCannibal({ scene, camera, collision, audio, trees, model, 
         blockedFor = 0;
         rig.lookWeight = .3;
         const speed = distance > 20 && behind() > 1.6 ? 4 : 1.8;
-        if (walkTo(plan.x, plan.z, speed, dt)) { const c = plan.cover; plan = null; beginObserve('new side', c); }
+        if (walkTo(plan.x, plan.z, speed, dt, 'stealth')) { const c = plan.cover; plan = null; beginObserve('new side', c); }
         if (stateTime > 25) { plan = null; beginObserve('gave up moving'); }
         break;
       }
       case 'withdraw': {
-        // Leaves the area out of sight; disappears only where nobody can see him.
-        const away = bearingFromPlayer;
-        walkTo(pos.x + Math.sin(away) * 8, pos.z + Math.cos(away) * 8, distance < 15 ? 5 : 3.5, dt);
+        // Leaves the area out of sight, to one fixed point far off (no turning on the spot);
+        // disappears only where nobody can see him.
+        if (!plan || !plan.leave) {
+          const away = bearingFromPlayer + (rand() - .5) * .8;
+          plan = { x: clamp(player.pos.x + Math.sin(away) * 48, -132, 132), z: clamp(player.pos.z + Math.cos(away) * 48, -222, 82), leave: true };
+        }
+        if (walkTo(plan.x, plan.z, distance < 15 ? 5 : 3.2, dt, 'flee')) plan = null;
         if (distance > 32 && !inView && visible < .2 || distance > 70) {
           show(false); setState('away', 'gone');
           if (cooldown < 10) cooldown = mix(16, 32, rand());
         }
+        break;
+      }
+      case 'stare': {
+        // Caught in the light he does not run: he stares back for a few heartbeats, then goes.
+        faceTo(player.pos.x, player.pos.z);
+        crouch(bodyRig.actions.watch ? 'watch' : 'perch');
+        rig.lookWeight = 1;
+        if (distance < 6 || stateTime > mix(2.5, 4, traits.boldness)) { plan = planCover('evade'); setState('evade', 'after the stare'); }
+        break;
+      }
+      case 'search': {
+        // Found him again (seen or heard, not just a hint)?
+        if (beliefAge() < .5 && belief.how !== 'hint' && belief.how !== 'director') { search = null; beginObserve('found him'); break; }
+        if (!search) startSearch('search');
+        if (!search.at) {
+          if (search.step > 6) {
+            const h = director.hint(player.pos, memory.unseenFor, beliefAge());
+            if (h) { learn(h, 0, false, 'hint'); startSearch('director hint'); break; }
+            plan = null; cooldown = mix(25, 45, rand()); setState('withdraw', 'gave up searching'); break;
+          }
+          nextSearchPoint();
+        }
+        search.t += dt;
+        if (search.listen > 0) {
+          // Crouched, listening, looking round the spot.
+          crouch(bodyRig.actions.watch ? 'watch' : 'perch');
+          faceTo(search.centre.x, search.centre.z); rig.lookWeight = .5;
+          search.listen -= dt;
+          if (search.listen <= 0) search.at = null;
+          break;
+        }
+        rig.lookWeight = .4;
+        if (walkTo(search.at[0], search.at[1], mix(1.1, 1.7, traits.hunger), dt, 'search') || search.t > 25 || follow.unreachable > 1) search.listen = mix(2, 4.5, traits.patience);
         break;
       }
       case 'jump': updateJump(dt); break;
@@ -797,15 +1050,19 @@ export function createCannibal({ scene, camera, collision, audio, trees, model, 
     const night = isNight();
     nightTime = night ? nightTime + dt : 0;
     if (drop.active) updateDrop(dt);
+    director.update(dt, { distance, seenClarity: clarity, inView: inView && clarity > .12, lit: litNow > .03, active: root.visible && !['withdraw', 'away', 'dead'].includes(state) });
+    nav.decay(dt);
+    if (cues.swing && !lastSwing) { swingHeard = true; director.habit('swings'); }
+    lastSwing = cues.swing;
     if (state === 'away') {
       if (!night || nightTime < 9) return;
       cooldown -= dt;
-      if (cooldown <= 0 && !spawn()) cooldown = 2;
+      if (cooldown <= 0 && !director.backOff && !spawn()) cooldown = 2;
       return;
     }
     if (state === 'dead') {
       bodyRig.update(dt);
-      if (!night) { show(false); scene.remove(knife); drop.active = drop.resting = drop.taken = false; setState('away'); knifeGrip.add(knife); knife.position.set(0, 0, 0); knife.rotation.set(0, 0, 0); newNight(); reset(); }
+      if (!night) { show(false); scene.remove(knife); drop.active = drop.resting = drop.taken = false; setState('away'); knifeGrip.add(knife); knife.position.set(0, 0, 0); knife.rotation.set(0, 0, 0); newNight(); director.reset(); reset(); }
       return;
     }
     stateTime += dt;
@@ -866,10 +1123,13 @@ export function createCannibal({ scene, camera, collision, audio, trees, model, 
   }
 
   // Test hooks (?dev).
-  function placeAt(x, z) { show(true); pos.set(x, altitude(x, z), z); tree = null; jump = null; plan = null; health = 2; knifeGrip.visible = true; }
+  function placeAt(x, z) { show(true); pos.set(x, altitude(x, z), z); tree = null; jump = null; plan = null; health = 2; knifeGrip.visible = true; follow.reset(); search = null; ambushing = false; learn(player.pos, 0, true, 'test'); }
   return {
-    update, frame, strike, take, reset,
+    update, frame, strike, take, reset, cues,
     get catching() { return catching; },
+    // For the night sounds and the birds: where he is, and how close to the player (0..1).
+    get threat() { return root.visible && state !== 'away' && state !== 'dead' ? pos : null; },
+    get presence() { return root.visible && state !== 'away' && state !== 'dead' ? 1 - smooth(6, 20, distance) : 0; },
     get canTake() { return drop.resting && !drop.taken; },
     knife, knifeGrip, root, actions: bodyRig.actions, senses, voice, body: bodyRig,
     state: () => ({
@@ -880,6 +1140,11 @@ export function createCannibal({ scene, camera, collision, audio, trees, model, 
       memory: { ...memory, lastSeenAt: memory.lastSeenAt && [+memory.lastSeenAt.x.toFixed(1), +memory.lastSeenAt.z.toFixed(1)], lookRate: +memory.lookRate.toFixed(2), alert: +memory.alert.toFixed(2), playerSpeed: +memory.playerSpeed.toFixed(2), unseenFor: +memory.unseenFor.toFixed(1) },
       need: +need.toFixed(1), observed: +observed.toFixed(1), plan: plan && { x: +plan.x.toFixed(1), z: +plan.z.toFixed(1), hidden: +(plan.hidden ?? 0).toFixed(2), cover: plan.cover?.kind ?? 'ground' },
       stats: { ...stats, breaks: stats.breaks.slice(-6) }, log: log.slice(-14),
+      belief: { x: +belief.pos.x.toFixed(1), z: +belief.pos.z.toFixed(1), age: +Math.min(999, beliefAge()).toFixed(1), how: belief.how, facing: knowsFacing(), off: +Math.hypot(belief.pos.x - player.pos.x, belief.pos.z - player.pos.z).toFixed(1) },
+      director: { phase: director.state.phase, menace: +director.state.menace.toFixed(2), tension: +director.state.tension.toFixed(1), encounters: director.state.encounters, peaks: director.state.peaks, unlocks: { ...director.state.unlocks }, log: director.state.log.slice(-6) },
+      nav: { ...navStats, ...follow.state, built: nav.built, path: follow.path.length },
+      darkSide: { time: +darkSide.time.toFixed(1), meanAngle: darkSide.time ? +(darkSide.angle / darkSide.time * 180 / Math.PI).toFixed(0) : null, inCone: +darkSide.inCone.toFixed(1), inBeam: +darkSide.inBeam.toFixed(1) },
+      lit: +litNow.toFixed(3), search: search && { step: search.step, listening: search.listen > 0 },
       gait: rig.mode + '/' + rig.gait, peeking: !!peekCover, speed: +rig.speed.toFixed(2), hip: +bodyRig.hipOffset.toFixed(3), contacts: bodyRig.contacts.count,
       dagger: drop.taken ? 'taken' : drop.resting ? 'ground' : drop.active ? 'falling' : 'hand',
       daggerPos: drop.active ? { x: knife.position.x, y: knife.position.y, z: knife.position.z } : null,
@@ -912,7 +1177,9 @@ export function createCannibal({ scene, camera, collision, audio, trees, model, 
       freeze(value) { frozen = value; },
       set(next) { setState(next, 'test'); },
       measure: name => voice.measure(name),
-      reset() { reset(); show(false); setState('away', 'test reset'); newNight(); stats.breaks.length = 0; stats.despawnsInView = 0; },
+      reset() { reset(); show(false); setState('away', 'test reset'); newNight(); director.reset(); search = null; follow.reset(); Object.assign(darkSide, { time: 0, angle: 0, inCone: 0, inBeam: 0 }); stats.breaks.length = 0; stats.despawnsInView = 0; },
+      director: () => director, nav: () => nav, learn(x, z, how = 'test') { learn({ x, z }, 0, false, how); }, search() { startSearch('test'); },
+      path(x, z) { const r = nav.findPath(pos.x, pos.z, x, z, exposureCost('stealth'), 1500); return { reached: r.reached, cost: +r.cost.toFixed(1), expanded: r.expanded, points: r.points.length }; },
       trace(name, count) { return bodyRig.trace(name, count); },
       bodyInfo() { const f = bodyRig.feet; return { analysis: bodyRig.analysis, leap: bodyRig.leap, contacts: bodyRig.contacts.count, plantedSamples: f.samples, meanPlantError: f.samples ? +(f.err / f.samples).toFixed(4) : 0, maxPlantError: +f.maxErr.toFixed(4), meanCorrectedSlip: f.samples ? +(f.slipSum / f.samples).toFixed(3) : 0 }; },
       resetFeet() { Object.assign(bodyRig.feet, { samples: 0, err: 0, maxErr: 0, slipSum: 0 }); bodyRig.contacts.count = 0; },

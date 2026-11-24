@@ -367,6 +367,10 @@ export function createForest(scene, renderer, textures, collision, time) {
     scene.add(trunk,crown);
     trunk.receiveShadow = true;
     crown.receiveShadow = true;
+    // Near trunks and branches cast shadows for the hand torch only (layer 3); the sun and moon
+    // keep using the canopy silhouettes.
+    trunk.castShadow = crown.castShadow = true;
+    trunk.layers.set(3); crown.layers.set(3);
     trunk.frustumCulled = crown.frustumCulled = false;
     return {trunk,crown};
   });
