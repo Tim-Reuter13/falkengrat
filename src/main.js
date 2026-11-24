@@ -1,9 +1,14 @@
 import * as T from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+import { anchor, toGame, toMap } from './region/geography.js';
+import { sites } from './region/layout.js';
+import { createTrailMap } from './region/map.js';
+import { createOpenRegion } from './region/scene.js';
+import { createWoodland } from './region/woodland.js';
 import { createBladeProbe } from './reflections.js';
 import { createBirds } from './birds.js';
 import assetUrls from 'game-assets';
-import { altitude, clamp, overlook, pathX, riverBank, riverX, waterLevel } from './math.js';
+import { altitude, clamp, overlook, pathX, waterAt, riverX } from './math.js';
 import { createRiver } from './river.js';
 import { placeDeadwood } from './wood.js';
 import { createAnimalTraces, createHabitatPlants } from './ecology.js';
@@ -132,7 +137,8 @@ async function game() {
   // Keyframe clips from the Animation Studio replace the cannibal's old mocap clips by role.
   const clipSources=await Promise.all(Object.keys(assetUrls).filter(k=>k.startsWith('clip/')).sort().map(k=>models.loadAsync(assetUrls[k])));
   cannibalModel.animations.push(...adaptClips(cannibalModel,clipSources));
-  const collision=makeCollision(),audio=createSound();
+  const woodland=createWoodland();
+  const collision=makeCollision(woodland.nearby),audio=createSound();
   const player=createPlayer(camera,collision,audio);
   const clock={value:0};
   const updateSky=createSky(scene);
@@ -149,6 +155,13 @@ async function game() {
   const pipe=createPipeline(renderer);
   // Hand torch (F, mouse wheel = focus) with its volumetric beam.
   const flashlight=createFlashlight({scene,camera,collision});
+  const torchButton=$('toggle-torch');
+  function toggleTorch(){
+    flashlight.toggle();
+    torchButton.textContent=flashlight.on?'An':'Aus';
+    torchButton.setAttribute('aria-pressed',String(flashlight.on));
+  }
+  torchButton.addEventListener('click',toggleTorch);
   pipe.volume=createBeamVolume(flashlight,quadVertex);
   createMountainScenery(scene,textures);
   const {perches,contacts,waterObstacles}=createRocks(scene,textures,collision);
@@ -159,6 +172,7 @@ async function game() {
   const probe=createBladeProbe(renderer,scene,river);
   const floor=createForestFloor(collision,contacts);
   createTerrain(scene,textures,floor);
+  const region=createOpenRegion(scene,forest,woodland,textures,clock,collision);
   const setPlantDistance=createUnderstory(scene,textures,clock,floor);
   const updateGrass=createGrass(scene,floor,clock,pipe.groundImage);
   const updateProps=createForestProps(scene,textures,floor);
@@ -279,14 +293,26 @@ async function game() {
     dead=false;death.hidden=true;
     document.body.classList.remove('dead');
     cannibal.reset();
-    player.enterTrail();
+    placeSite(spawnSite);
     launch();
   }
   $('death-again').addEventListener('click',revive);
   let lockEnabled=true,firstEntry=true;
+  let spawnSite=Object.hasOwn(sites,urlOptions.get('start'))?sites[urlOptions.get('start')]:null;
+  function placeSite(site){
+    if(!site){player.enterTrail();return;}
+    const p=toGame(site.x,site.z);
+    player.place(p.x,p.z,site.yaw+Math.PI,-.03);
+  }
+  const trailMap=createTrailMap({player,active:()=>active,pause,launch,travel:site=>{
+    spawnSite=site;firstEntry=false;
+    cannibal.travel();
+    placeSite(site);
+  }});
+  if(spawnSite)placeSite(spawnSite);
   function launch() {
     if(touch.enabled&&!touch.portrait.matches)return;
-    if(firstEntry){player.enterTrail();firstEntry=false;}
+    if(firstEntry){placeSite(spawnSite);firstEntry=false;}
     active=true;
     touch.reset();
     setPhoto(false);
@@ -345,10 +371,11 @@ async function game() {
     if(['Space','ArrowUp','ArrowDown','ArrowLeft','ArrowRight','Escape'].includes(event.code))event.preventDefault();
     if(event.code==='Space'){if(!event.repeat)player.jump();return;}
     if(event.code==='Escape'&&!event.repeat){pause();return;}
+    if(event.code==='KeyK'&&!event.repeat){event.preventDefault();trailMap.open();return;}
     if(event.code==='KeyP'&&!event.repeat){setPhoto(!photo);return;}
     if(event.code==='KeyM'&&!event.repeat){toggleSound();toast(muted?'Ton aus':'Ton an');return;}
     if(event.code==='KeyN'&&!event.repeat){setNight(!dayNight.night);toast(dayNight.night?'Nacht':'Tag');return;}
-    if(event.code==='KeyF'&&!event.repeat){flashlight.toggle();return;}
+    if(event.code==='KeyF'&&!event.repeat){toggleTorch();return;}
     if(event.code==='KeyE'&&!event.repeat){if(cannibal.take(player.ground))toast('Knochendolch aufgehoben',3);return;}
     if(['Digit1','Digit2','Digit3'].includes(event.code)&&!event.repeat){
       changeQuality(['speed','balanced','high'][Number(event.code.slice(-1))-1]);
@@ -399,9 +426,10 @@ async function game() {
       state:()=>({x:player.ground.x,y:player.ground.y,z:player.ground.z,fps:sampledFPS,quality:qualityKey,
         scale,locked,active,reached,practiceHit,weaponVisible:sword.visible,cubeCaptures:probe.captures,
         models:sword.rig.children.map(model=>model.getObjectsByProperty('isMesh',true).length),birds:birds.state(),
-        waterDepth:riverBank(player.ground.x,player.ground.z)<0?Math.max(0,waterLevel(player.ground.z)-player.ground.y):0,
+        waterDepth:Math.max(0,waterAt(player.ground.x,player.ground.z).bank<0?waterAt(player.ground.x,player.ground.z).level-player.ground.y:0),
         calls:lastCalls,triangles:lastTriangles,trees:forest.count}),
       riverX,
+      world:()=>({...toMap(player.ground.x,player.ground.z),...region.stats(), elevation:player.ground.y+anchor.y}),
       birdHomes:birds.homes,
       waterEffects:river.stats,
       ecology:()=>({bladesPerTuft,rootSites:deadwood.rootSites,fallen:deadwood.fallen,species:habitat.counts,
@@ -467,7 +495,7 @@ async function game() {
       toast('Aussichtspunkt erreicht',4.8);
     }
     if(frameCount%10===1){
-      objective.textContent=reached?'Aussichtspunkt erreicht':'Aussichtspunkt · '+Math.round(distance)+' m';
+      objective.textContent=reached?'Aussichtspunkt erreicht':'Aussichtspunkt · '+(distance<1000?Math.round(distance)+' m':(distance/1000).toFixed(1).replace('.',',')+' km');
       guide.classList.toggle('hidden',reached);
     }
     if(realTime>=.8){
@@ -491,9 +519,10 @@ async function game() {
     const preset=quality;
     const coverage=camera.position;
     if(active&&framesRendered%8===0){
-      const side=riverX(coverage.z)-coverage.x;
-      audio.stream(riverBank(coverage.x,coverage.z),Math.sign(side)*camera.matrixWorld.elements[0]*Math.min(1,Math.abs(side)/8));
+      const {side,bank}=waterAt(coverage.x,coverage.z);
+      audio.stream(bank,Math.sign(side)*camera.matrixWorld.elements[0]*Math.min(1,Math.abs(side)/8));
     }
+    region.update(coverage.x,coverage.z);
     forest.update(coverage,preset);
     updateGrass(coverage,preset.grass,preset.grassNear);
     updateProps(preset.props);
@@ -519,9 +548,9 @@ async function game() {
     lastCalls=renderer.info.render.calls;
     lastTriangles=renderer.info.render.triangles;
     if(framesRendered++===0){
-      play.disabled=false;
-      play.querySelector('span').textContent='Wald betreten';
-      subtitle.textContent='Folge dem Bach durch den Bergwald zum Aussichtspunkt.';
+      play.disabled=false;$('open-trail-map').disabled=false;
+      play.querySelector('span').textContent=spawnSite?'Oldhoffen erkunden':'Wald betreten';
+      subtitle.textContent='Bergwald, Glasweiher und die Talstraße nach Oldhoffen.';
       menu.classList.add('ready');
     }
   }

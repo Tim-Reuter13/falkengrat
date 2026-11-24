@@ -49,7 +49,8 @@ const menuStyle=(await readFile(resolve(root,'src/menu.css'),'utf8'))
 const menuCode=(await readFile(resolve(root,'src/menu.js'),'utf8')).replace(/<\/script/gi,'<\\/script');
 const notice=await readFile(resolve(root,'node_modules/three/LICENSE'),'utf8');
 const source=result.outputFiles[0].text.replace(/<\/script/gi,'<\\/script');
-const html=template.replace('/* GAME_STYLES */',()=>style+'\n'+menuStyle+'\n'+previewStyle).replace('/* GAME_CODE */',()=>source).replace('/* MENU_CODE */',()=>menuCode)
+const trailArt=await readFile(resolve(root,'assets/oldhoffen-wanderkarte.webp'));
+const html=template.replace('/* TRAIL_ART */',()=>'data:image/webp;base64,'+trailArt.toString('base64')).replace('/* GAME_STYLES */',()=>style+'\n'+menuStyle+'\n'+previewStyle).replace('/* GAME_CODE */',()=>source).replace('/* MENU_CODE */',()=>menuCode)
   .replace('</body>',()=>`<!-- Three.js\n${notice}\n-->\n</body>`);
 await mkdir(dirname(output),{recursive:true});
 await writeFile(output,html);

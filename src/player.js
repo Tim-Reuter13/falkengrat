@@ -1,5 +1,5 @@
 import * as T from 'three';
-import { altitude, clamp, mix, riverBank, waterLevel } from './math.js';
+import { altitude, clamp, mix, waterAt } from './math.js';
 
 export function createPlayer(camera, collision, audio) {
   const ground = new T.Vector3(), velocity = new T.Vector3(), keys = new Set();
@@ -11,7 +11,7 @@ export function createPlayer(camera, collision, audio) {
   let bobStrength=1;
   const eyeHeight=1.69;
   const place = (x,z,heading,tilt) => {
-    ground.set(x,altitude(x,z),z);
+    ground.set(x,collision.floorAt(x,z,altitude(x,z)+.3),z);
     eyeY=ground.y+eyeHeight;
     camera.position.set(ground.x,eyeY,ground.z);
     yaw=heading; pitch=tilt;
@@ -55,7 +55,8 @@ export function createPlayer(camera, collision, audio) {
       if(direction.lengthSq()>1)direction.normalize();
       if(!moving)direction.set(0,0,0);
       direction.applyAxisAngle(T.Object3D.DEFAULT_UP,yaw);
-      const wet=riverBank(ground.x,ground.z)<0?clamp(waterLevel(ground.z)-ground.y,0,1):0;
+      const water=waterAt(ground.x,ground.z);
+      const wet=water.bank<0?clamp(water.level-ground.y,0,1):0;
       const speed=(sprint ? 5.6 : 2.88)*(1-wet*.51);
       const response=grounded?(direction.lengthSq()>.001?5.9:8.0):2.15;
       velocity.lerp(direction.multiplyScalar(speed),1-Math.exp(-dt*response));

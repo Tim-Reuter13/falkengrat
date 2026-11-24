@@ -3,6 +3,8 @@ import { Capsule } from 'three/addons/math/Capsule.js';
 import { Octree } from 'three/addons/math/Octree.js';
 import { altitude, clamp } from './math.js';
 
+import { anchor, deckHeight, worldBounds } from './region/geography.js';
+
 const radius=.255, stepHeight=.28, bodyHeight=1.74, cellSize=5;
 const cell=value=>Math.floor(value/cellSize);
 
@@ -17,7 +19,7 @@ function buildTree(geometry,matrix){
   return tree.build();
 }
 
-export function makeCollision(){
+export function makeCollision(extraNearby){
   const cells=new Map(),entries=[];
   const capsule=new Capsule(new Vector3(),new Vector3(),radius);
   const ray=new Ray(),normal=new Vector3(),hit=new Vector3(),candidate=new Vector3(),triPoint=new Vector3();
@@ -37,6 +39,7 @@ export function makeCollision(){
   }
 
   function around(x,z,reach,visit){
+    extraNearby?.(x,z,reach,visit);
     const visited=new Set();
     for(let i=cell(x-reach);i<=cell(x+reach);i++)for(let j=cell(z-reach);j<=cell(z+reach);j++){
       const group=cells.get(i+','+j);
@@ -99,7 +102,7 @@ export function makeCollision(){
   }
 
   function floorAt(x,z,ceiling){
-    let floor=altitude(x,z);
+    let floor=deckHeight(anchor.x-x,anchor.z-z,altitude(x,z));
     if(floor>=ceiling)return floor;
     ray.origin.set(x,ceiling+.001,z);ray.direction.set(0,-1,0);
     around(x,z,0,o=>{
@@ -121,15 +124,15 @@ export function makeCollision(){
       if(!geometry.boundingBox)geometry.computeBoundingBox();
       const bounds=geometry.boundingBox.clone().applyMatrix4(matrix);
       const y=altitude(x,z),height=bounds.max.y-y;
-      if(height<.19||x<-150||x>150||z<-242||z>98)return;
+      if(height<.19)return;
       const r=Math.max(x-bounds.min.x,bounds.max.x-x,z-bounds.min.z,bounds.max.z-z);
       register({x,z,radius:r,type,height,geometry,matrix:matrix.clone(),bounds});
     },
     forEach(visit){entries.forEach(visit);},
-    around,floorAt,
+    woodland:extraNearby,around,floorAt,
     move(position,velocity,dt,grounded){
-      position.x=clamp(position.x+velocity.x*dt,-139,139);
-      position.z=clamp(position.z+velocity.z*dt,-228,88);
+      position.x=clamp(position.x+velocity.x*dt,worldBounds.minX,worldBounds.maxX);
+      position.z=clamp(position.z+velocity.z*dt,worldBounds.minZ,worldBounds.maxZ);
       for(let pass=0;pass<4;pass++){
         const terrain=altitude(position.x,position.z);
         const foot=grounded?Math.max(position.y,terrain):position.y;

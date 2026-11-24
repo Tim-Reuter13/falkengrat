@@ -1,53 +1,12 @@
 import { rootingMask } from './animal-traces.js';
 
-export const TAU = Math.PI * 2;
-export const clamp = (value, low, high) => Math.min(high, Math.max(low, value));
-export const mix = (a, b, fraction) => a + (b - a) * fraction;
-export const smooth = (a, b, value) => {
-  const x = clamp((value - a) / (b - a), 0, 1);
-  return x * x * (3 - 2 * x);
-};
+export * from './noise.js';
+import { clamp, fbm, mix, noise, pathX, smooth } from './noise.js';
+import { anchor, core, regionalGround, regionalBed, mapWater } from './region/geography.js';
 
-export function random(seed) {
-  return () => {
-    seed = (Math.imul(seed, 1664525) + 1013904223) >>> 0;
-    return seed / 4294967296;
-  };
-}
+import { riverBank, riverX, waterLevel } from './valley-stream.js';
+export * from './valley-stream.js';
 
-function hash(x, y) {
-  let h = Math.imul(x, 374761393) + Math.imul(y, 668265263);
-  h = Math.imul(h ^ (h >>> 13), 1274126177);
-  return ((h ^ (h >>> 16)) >>> 0) / 4294967295;
-}
-
-export function noise(x, y) {
-  const i = Math.floor(x), j = Math.floor(y);
-  const u = smooth(0, 1, x - i), v = smooth(0, 1, y - j);
-  return mix(mix(hash(i, j), hash(i + 1, j), u), mix(hash(i, j + 1), hash(i + 1, j + 1), u), v);
-}
-
-export function fbm(x, y) {
-  return noise(x, y) * .56 + noise(x * 2.07 + 13, y * 2.07) * .28
-    + noise(x * 4.22, y * 4.22 - 16) * .11 + noise(x * 8.51, y * 8.51) * .05;
-}
-
-export function pathX(z) {
-  return Math.sin(-z * .034) * 5.8 + Math.sin(-z * .078) * 1.85 + z * .04;
-}
-
-export function riverX(z) {
-  return 12.5+9.2*Math.sin((z+30)*.035)+5.8*Math.sin((z+24)*.062)+.009*z-10*Math.exp(-((z-2)**2)/580);
-}
-
-export function riverWidth(z) {
-  return 3.65+1.05*Math.sin(z*.040+1.1)+.65*Math.sin(z*.093);
-}
-
-export const waterLevel=z=>6.7-z*.034+.09*Math.sin(z*.15);
-export const riverBank=(x,z)=>Math.abs(x-riverX(z))-riverWidth(z);
-export const channelSlope=z=>(riverX(z+.2)-riverX(z-.2))/.4;
-export const riverSpeed=z=>1.15+.37*Math.sin(z*.071+.35)+.24*Math.sin(z*.139+1.4);
 export const riverGlsl=`
   float channelAt(float z){
     return 12.5+9.2*sin((z+30.)*.035)+5.8*sin((z+24.)*.062)+.009*z-10.*exp(-pow(abs(z-2.),2.)/580.);
@@ -103,10 +62,25 @@ function terrainAxis(min,max,innerMin,innerMax,outerMin,outerMax) {
 let grid;
 export function getTerrainGrid(){
   if(grid)return grid;
-  const xs=terrainAxis(-334,334,-36,45,-150,157);
-  const zs=terrainAxis(-473,177,-149,20,-246,93);
+  const xMin=anchor.x-core.east, xMax=anchor.x-core.west;
+  const zMin=anchor.z-core.south, zMax=anchor.z-core.north;
+  function axis(min,max,...steps) {
+    const values=new Set(terrainAxis(min,max,...steps));
+    for(let n=min;n<max;n+=16)values.add(n);
+    return [...values].sort((a,b)=>a-b).filter((v,i,all)=>!i||v-all[i-1]>.00001);
+  }
+  const xs=axis(xMin,xMax,-36,45,-150,157);
+  const zs=axis(zMin,zMax,-149,20,-246,93);
   const elevations=new Float32Array(xs.length*zs.length);
-  for(let j=0;j<zs.length;j++)for(let i=0;i<xs.length;i++)elevations[j*xs.length+i]=landform(xs[i],zs[j]);
+  for(let j=0;j<zs.length;j++)for(let i=0;i<xs.length;i++){
+    const x=xs[i],z=zs[j];
+    const d=Math.min(x-xMin,xMax-x,z-zMin,zMax-z);
+    let weight=smooth(0,95,d);
+    // Retain the surveyed streambed up to both ends of the detailed water mesh.
+    if(z>=-470&&z<=178)weight=Math.max(weight,(1-smooth(5,17,Math.abs(x-riverX(z))))*smooth(0,22,d));
+    const local=weight>0?landform(x,z):0;
+    elevations[j*xs.length+i]=weight>=1?local:mix(regionalBed(anchor.x-x,anchor.z-z)-anchor.y,local,weight);
+  }
   grid={xs,zs,elevations};
   return grid;
 }
@@ -122,6 +96,8 @@ function interval(axis,value) {
 
 // Place feet, roots and stones on the same triangle the GPU actually draws.
 export function altitude(x,z){
+  const mx=anchor.x-x,mz=anchor.z-z;
+  if(mx<core.west||mx>core.east||mz<core.north||mz>core.south)return regionalGround(mx,mz);
   const {xs,zs,elevations}=getTerrainGrid();
   const i=interval(xs,x),j=interval(zs,z),n=xs.length,base=j*n+i;
   const u=clamp((x-xs[i])/(xs[i+1]-xs[i]),0,1),v=clamp((z-zs[j])/(zs[j+1]-zs[j]),0,1);
@@ -130,3 +106,8 @@ export function altitude(x,z){
 }
 
 export const overlook = { x: pathX(-118), z: -118 };
+
+export function waterAt(x,z){
+  if(z>=-470&&z<=178&&Math.abs(x-riverX(z))<45)return {bank:riverBank(x,z),level:waterLevel(z),side:riverX(z)-x};
+  return mapWater(anchor.x-x,anchor.z-z);
+}

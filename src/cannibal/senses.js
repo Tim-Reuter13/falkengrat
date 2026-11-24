@@ -6,7 +6,7 @@ import { altitude, clamp, smooth } from '../math.js';
 // tree crowns as a foliage density along the line.
 export function createSenses({ collision, trees }) {
   // ---------- trees: grid for crowns and climbing
-  const usable = trees.filter(t => t.height >= 8.5 && Math.abs(t.x) < 134 && t.z > -224 && t.z < 84);
+  const usable = trees.filter(t => t.height >= 8.5);
   const cellSize = 10, cells = new Map();
   const key = (i, j) => i + ',' + j;
   for (const t of trees) {
@@ -16,6 +16,7 @@ export function createSenses({ collision, trees }) {
   }
   const climbable = new Set(usable);
   function near(x, z, reach, visit, all = false) {
+    collision.woodland?.(x,z,reach,t=>{const d=Math.hypot(t.x-x,t.z-z);if((all||t.height>=8.5)&&d<=reach)visit(t,d);});
     for (let i = Math.floor((x - reach) / cellSize); i <= Math.floor((x + reach) / cellSize); i++)
       for (let j = Math.floor((z - reach) / cellSize); j <= Math.floor((z + reach) / cellSize); j++)
         for (const t of cells.get(key(i, j)) ?? []) {
@@ -46,6 +47,7 @@ export function createSenses({ collision, trees }) {
     coverCells.get(k).push(c);
   });
   function coversNear(x, z, reach, visit) {
+    collision.woodland?.(x,z,reach,t=>{const d=Math.hypot(t.x-x,t.z-z);if(d<=reach)visit({x:t.x,z:t.z,r:t.radius,height:t.height,kind:t.type},d);});
     for (let i = Math.floor((x - reach) / cellSize); i <= Math.floor((x + reach) / cellSize); i++)
       for (let j = Math.floor((z - reach) / cellSize); j <= Math.floor((z + reach) / cellSize); j++)
         for (const c of coverCells.get(key(i, j)) ?? []) {

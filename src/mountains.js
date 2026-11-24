@@ -30,10 +30,14 @@ export function createMountainScenery(scene,textures) {
     if(!band.map)return;
     const material=new T.ShaderMaterial({
       uniforms:{portrait:{value:band.map},fogTint:{value:hazeColor},haze:{value:band.haze},wrap:{value:index===0?1:0},nightShade},
-      side:T.DoubleSide,
+      side:T.DoubleSide,depthWrite:false,
       vertexShader:`
         varying vec2 picture;
-        void main(){picture=uv;gl_Position=projectionMatrix*modelViewMatrix*vec4(position,1.);}
+        void main(){
+          picture=uv;
+          vec4 clip=projectionMatrix*vec4(mat3(viewMatrix)*position,1.);
+          gl_Position=clip.xyww;
+        }
       `,
       fragmentShader:`
         uniform sampler2D portrait;
@@ -58,7 +62,7 @@ export function createMountainScenery(scene,textures) {
           vec3 base=pixel.rgb*vec3(.97,.99,1.03);
           float valley=1.-smoothstep(.045,.43,picture.y);
           base*=nightShade;
-          base=mix(base,fogTint*.69,haze+valley*.18);
+          base=mix(base,fogTint*.94,haze+valley*(.76-haze));
           gl_FragColor=vec4(base,1.);
           #include <tonemapping_fragment>
           #include <colorspace_fragment>
@@ -66,7 +70,8 @@ export function createMountainScenery(scene,textures) {
       `,
     });
     const model = new T.Mesh(arc(band.radius,band.bottom,band.height,band.heading,band.width,band.repeat),material);
-    model.renderOrder=35+index;
+    model.frustumCulled=false;
+    model.renderOrder=101+index;
     scene.add(model);
   });
 }

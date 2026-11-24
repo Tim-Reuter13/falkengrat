@@ -1,4 +1,4 @@
-import { altitude, clamp, riverBank } from '../math.js';
+import { altitude, clamp, waterAt } from '../math.js';
 
 // Navigation for the cannibal: a 1 m grid over the playable valley.
 //  - blocked: trunks, boulders, logs and root plates (from the collision index), cliffs (> ~50 deg)
@@ -9,19 +9,20 @@ import { altitude, clamp, riverBank } from '../math.js';
 // when it is stuck or the goal moved, marks cells it cannot pass and reports unreachable goals.
 export const NAV = { x0: -139, z0: -228, x1: 139, z1: 88, cell: 1 };
 
-export function createNavGrid(collision) {
-  const W = Math.round((NAV.x1 - NAV.x0) / NAV.cell) + 1, H = Math.round((NAV.z1 - NAV.z0) / NAV.cell) + 1;
+export function createNavGrid(collision, rolling = false) {
+  const area=rolling?{x0:0,x1:176,z0:0,z1:176,cell:1}:NAV;
+  const W = Math.round((area.x1 - area.x0) / area.cell) + 1, H = Math.round((area.z1 - area.z0) / area.cell) + 1;
   const N = W * H;
   const base = new Float32Array(N);        // Infinity = blocked
   const cover = new Uint8Array(N);         // 1 = next to something that hides a crouching body
   const temp = new Float32Array(N);        // temporary penalties (cells he got stuck on), decay over time
   const idx = (i, j) => j * W + i;
-  const cx = i => NAV.x0 + i * NAV.cell, cz = j => NAV.z0 + j * NAV.cell;
-  const ci = x => Math.round((x - NAV.x0) / NAV.cell), cj = z => Math.round((z - NAV.z0) / NAV.cell);
+  const cx = i => area.x0 + i * area.cell, cz = j => area.z0 + j * area.cell;
+  const ci = x => Math.round((x - area.x0) / area.cell), cj = z => Math.round((z - area.z0) / area.cell);
   const inside = (i, j) => i >= 0 && j >= 0 && i < W && j < H;
 
   // ---------- build the static layer
-  let built = false, building = null, buildTime = 0;
+  let built = rolling, building = null, buildTime = 0;
   // The build is a generator so it can run in small slices between frames (no hitch).
   function* steps() {
     for (let j = 0; j < H; j++) {
@@ -31,7 +32,7 @@ export function createNavGrid(collision) {
         const slope = Math.hypot(gx, gz);
         let c = 1 + slope * 3.2;
         if (slope > 1.25) c = Infinity;
-        const bank = riverBank(x, z);
+        const bank = waterAt(x, z).bank;
         if (bank < 0) c += bank < -1.6 ? 14 : 5;        // wading is slow and loud, deep water worse
         base[idx(i, j)] = c;
       }
@@ -41,6 +42,7 @@ export function createNavGrid(collision) {
     // top stands more than knee-high (one floor ray per covered cell).
     const meshCells = new Set();
     collision.forEach(o => {
+      if(o.bounds.max.x<area.x0-2||o.bounds.min.x>area.x1+2||o.bounds.max.z<area.z0-2||o.bounds.min.z>area.z1+2)return;
       if (o.type === 'tree') {
         const r = o.radius + .38;
         stamp(o.x, o.z, r, true);
@@ -128,12 +130,40 @@ export function createNavGrid(collision) {
     return top;
   }
   const DIRS = [[1, 0, 1], [-1, 0, 1], [0, 1, 1], [0, -1, 1], [1, 1, Math.SQRT2], [1, -1, Math.SQRT2], [-1, 1, Math.SQRT2], [-1, -1, Math.SQRT2]];
+  let originX=Infinity,originZ=Infinity;
+  function center(x,z){
+    if(!rolling || Math.abs(x-originX)<=24&&Math.abs(z-originZ)<=24)return false;
+    originX=Math.round(x/16)*16;originZ=Math.round(z/16)*16;
+    area.x0=originX-88;area.z0=originZ-88;
+    base.fill(NaN);cover.fill(0);temp.fill(0);tempDirty=false;
+    return true;
+  }
+  function cellCost(n){
+    if(!rolling||!Number.isNaN(base[n]))return base[n];
+    const x=cx(n%W),z=cz(Math.floor(n/W)),y=altitude(x,z);
+    const slope=Math.hypot(altitude(x+.5,z)-altitude(x-.5,z),altitude(x,z+.5)-altitude(x,z-.5));
+    const bank=waterAt(x,z).bank;
+    let cost=slope>1.25?Infinity:1+slope*3.2+(bank<0?(bank<-1.6?14:5):0);
+    collision.around(x,z,2,(o)=>{
+      if(o.type==='tree'){
+        const d=Math.hypot(x-o.x,z-o.z)-o.radius;
+        if(d<.52)cost=Infinity;
+        if(d<1.8)cover[n]=1;
+      } else if(o.geometry && o.bounds.max.y>y+.32) {
+        const b=o.bounds,dx=Math.max(b.min.x-x,0,x-b.max.x),dz=Math.max(b.min.z-z,0,z-b.max.z);
+        if(dx+dz<1.5)cover[n]=1;
+        if(dx+dz<.3 && (o.type==='house'||collision.floorAt(x,z,b.max.y+.1)>y+.28))cost=Infinity;
+      }
+    });
+    base[n]=cost;
+    return cost;
+  }
   function nearestOpen(i, j) {
-    if (inside(i, j) && base[idx(i, j)] !== Infinity) return [i, j];
+    if (inside(i, j) && cellCost(idx(i, j)) !== Infinity) return [i, j];
     for (let r = 1; r < 6; r++) for (let dj = -r; dj <= r; dj++) for (let di = -r; di <= r; di++) {
       if (Math.max(Math.abs(di), Math.abs(dj)) !== r) continue;
       const a = i + di, b = j + dj;
-      if (inside(a, b) && base[idx(a, b)] !== Infinity) return [a, b];
+      if (inside(a, b) && cellCost(idx(a, b)) !== Infinity) return [a, b];
     }
     return null;
   }
@@ -159,17 +189,17 @@ export function createNavGrid(collision) {
         const a = i + di, b = j + dj;
         if (!inside(a, b)) continue;
         const m = idx(a, b);
-        const bc = base[m];
+        const bc = cellCost(m);
         if (bc === Infinity || closed[m] === generation) continue;
         // no corner cutting past blocked cells
-        if (di && dj && (base[idx(i + di, j)] === Infinity || base[idx(i, j + dj)] === Infinity)) continue;
+        if (di && dj && (cellCost(idx(i + di, j)) === Infinity || cellCost(idx(i, j + dj)) === Infinity)) continue;
         const x = cx(a), z = cz(b);
         let c = bc + temp[m] + (extra ? extra(x, z) : 0);
         if (cover[m]) c *= .82;
-        const ng = g[n] + c * len * NAV.cell;
+        const ng = g[n] + c * len * area.cell;
         if (stamp2[m] !== generation || ng < g[m]) {
           stamp2[m] = generation; g[m] = ng; from[m] = n;
-          push(m, ng + Math.hypot(a - t[0], b - t[1]) * NAV.cell * 1.25);   // weighted A*: a little longer path, far fewer nodes
+          push(m, ng + Math.hypot(a - t[0], b - t[1]) * area.cell * 1.25);   // weighted A*: a little longer path, far fewer nodes
         }
       }
     }
@@ -184,10 +214,10 @@ export function createNavGrid(collision) {
   function walkable(a, b) {
     const ai = a % W, aj = (a / W) | 0, bi = b % W, bj = (b / W) | 0;
     const steps = Math.max(Math.abs(bi - ai), Math.abs(bj - aj)) * 2;
-    const ref = base[a];
+    const ref = cellCost(a);
     for (let s = 1; s < steps; s++) {
       const i = Math.round(ai + (bi - ai) * s / steps), j = Math.round(aj + (bj - aj) * s / steps);
-      const c = base[idx(i, j)];
+      const c = cellCost(idx(i, j));
       if (c === Infinity || c > ref + 4 || temp[idx(i, j)] > 2) return false;
     }
     return true;
@@ -221,11 +251,11 @@ export function createNavGrid(collision) {
     const a = nearestOpen(ci(ax), cj(az)), b = nearestOpen(ci(bx), cj(bz));
     return !!a && !!b && walkable(idx(a[0], a[1]), idx(b[0], b[1]));
   };
-  const blocked = (x, z) => { const i = ci(x), j = cj(z); return !inside(i, j) || base[idx(i, j)] === Infinity; };
-  const costAt = (x, z) => { const i = ci(x), j = cj(z); return inside(i, j) ? base[idx(i, j)] : Infinity; };
+  const blocked = (x, z) => { const i = ci(x), j = cj(z); return !inside(i, j) || cellCost(idx(i, j)) === Infinity; };
+  const costAt = (x, z) => { const i = ci(x), j = cj(z); return inside(i, j) ? cellCost(idx(i, j)) : Infinity; };
   const nearCover = (x, z) => { const i = ci(x), j = cj(z); return inside(i, j) && cover[idx(i, j)] === 1; };
 
-  return { build, buildAsync, findPath, penalise, decay, clear, blocked, costAt, nearCover, size: [W, H], get built() { return built; } };
+  return { center, build, buildAsync, findPath, penalise, decay, clear, blocked, costAt, nearCover, size: [W, H], get built() { return built; } };
 }
 
 // Follows a path: replans when the goal moved, every few seconds, or when progress stalls;

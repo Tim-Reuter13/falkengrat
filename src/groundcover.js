@@ -1,5 +1,6 @@
 import * as T from 'three';
 import { altitude, clamp, fbm, mix, noise, pathX, random, riverBank, riverWidth, riverX, smooth, TAU } from './math.js';
+import { outerFloor } from './region/woodland.js';
 import { rootingMask } from './animal-traces.js';
 
 const startX=-352,startZ=-490,extent=704,resolution=1024;
@@ -60,6 +61,7 @@ export function createForestFloor(collision, rockContacts) {
   return {
     texture,soil,
     at(x,z) {
+      if(x < -230 || x > 230 || z < -450 || z > 125)return outerFloor(x,z);
       const p=index(x,z);
       return {trail:pixels[p]/255,grass:pixels[p+1]/255,moisture:pixels[p+2]/255,shade:pixels[p+3]/255};
     },
@@ -196,7 +198,7 @@ export function createGrass(scene,floor,clock,groundImage) {
   function createCell(ix,iz) {
     const rng=random(Math.imul(ix+417,27191)^Math.imul(iz+415,74507));
     const base=[],extra=[];
-    const side=32;
+    const side=Math.abs(ix*cellSize)>230||iz*cellSize < -450||iz*cellSize>125?20:32;
     for(let i=0;i<side*side;i++){
       const x=(ix+(i%side+rng())/side)*cellSize;
       const z=(iz+(Math.floor(i/side)+rng())/side)*cellSize;

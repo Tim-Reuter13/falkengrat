@@ -261,7 +261,7 @@ function treeCards(scene, entries, atlas, photograph, time, lod, reach, species)
   const mesh = new T.Mesh(cardGeometry(entries),material);
   mesh.frustumCulled = false;
   scene.add(mesh);
-  return mesh.geometry;
+  return mesh;
 }
 
 function addCanopyShadow(scene, geometry, atlas) {
@@ -300,6 +300,7 @@ function addCanopyShadow(scene, geometry, atlas) {
   caster.castShadow=true;
   caster.frustumCulled=false;
   scene.add(caster);
+  return caster;
 }
 
 export function createForest(scene, renderer, textures, collision, time) {
@@ -320,7 +321,7 @@ export function createForest(scene, renderer, textures, collision, time) {
     }
     const entry = {x,y:altitude(x,z),z,height,width:height*bakedWidth,angle:rand()*TAU,seed:rand(),tone:mix(.56,1.02,rand())};
     groups[species].push(entry);
-    if (z > -260 && Math.abs(x) < 160) collision.add(x,z,height*.022,'tree',height);
+    collision.add(x,z,height*.022,'tree',height);
   };
   [
     [-4.55,-7.3,23.5,0],[9.15,-9.25,20.8,1],[-5.6,-13,20.9,1],[6.7,-23,23.8,0],
@@ -361,7 +362,7 @@ export function createForest(scene, renderer, textures, collision, time) {
   const atlasTextures = targets.length ? targets.map(t=>t.texture) : [textures.atlasFir,textures.atlasSpruce];
   const models = geometry.map((tree,i) => {
     const cards=treeCards(scene,groups[i],atlasTextures[i],i ? textures.spruce : textures.fir,time,lod,reach,i);
-    addCanopyShadow(scene,cards,atlasTextures[i]);
+    const canopy=addCanopyShadow(scene,cards.geometry,atlasTextures[i]);
     const trunk = new T.InstancedMesh(tree.trunk,fadingMaterial(wood,lod),160);
     const crown = new T.InstancedMesh(tree.leaves,fadingMaterial(leaves,lod),160);
     scene.add(trunk,crown);
@@ -372,11 +373,32 @@ export function createForest(scene, renderer, textures, collision, time) {
     trunk.castShadow = crown.castShadow = true;
     trunk.layers.set(3); crown.layers.set(3);
     trunk.frustumCulled = crown.frustumCulled = false;
-    return {trunk,crown};
+    return {trunk,crown,cards,canopy};
   });
   let lastX=Infinity,lastZ=Infinity,lastLod=0;
   const object = new T.Object3D();
+  const stands=new Set();
   return {
+    addStand(bySpecies) {
+      const meshes=bySpecies.map((trees,species)=>{
+        if(!trees.length)return null;
+        const geometry=cardGeometry(trees);
+        const box=new T.Box3();
+        for(const t of trees)box.expandByPoint(new T.Vector3(t.x,t.y,t.z));
+        geometry.boundingSphere=box.getBoundingSphere(new T.Sphere());
+        geometry.boundingSphere.radius+=36;
+        const mesh=new T.Mesh(geometry,models[species].cards.material);
+        const canopy=new T.Mesh(geometry,models[species].canopy.material);
+        canopy.customDepthMaterial=models[species].canopy.customDepthMaterial;
+        canopy.castShadow=true;
+        mesh.add(canopy);
+        scene.add(mesh);
+        return mesh;
+      });
+      stands.add(bySpecies);
+      lastX=Infinity;
+      return ()=>{stands.delete(bySpecies);for(const m of meshes)if(m){scene.remove(m);m.geometry.dispose();} lastX=Infinity;};
+    },
     count:groups[0].length+groups[1].length,
     // Tree records {x,y,z,height} for effects that anchor to crowns (light shafts).
     trees:groups.flat(),
@@ -389,7 +411,9 @@ export function createForest(scene, renderer, textures, collision, time) {
       groups.forEach((trees,species)=>{
         const {trunk,crown}=models[species];
         let index=0;
-        for (const e of trees) {
+        const nearby=[trees];
+        for(const stand of stands)if(stand[species].length && Math.abs(stand[species][0].x-position.x)<340 && Math.abs(stand[species][0].z-position.z)<340)nearby.push(stand[species]);
+        for(const records of nearby)for (const e of records) {
           if ((e.x-position.x)**2+(e.z-position.z)**2 > (quality.treeNear+7)**2 || index>=160) continue;
           object.position.set(e.x,e.y,e.z);
           object.rotation.set(0,e.angle,0);

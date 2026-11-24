@@ -232,7 +232,7 @@ export function createRiver(time,obstacles,foamTexture) {
         rock.timer=.125+rng()*.22+distance*.012;
       }
       const {x,y,z}=player.ground;
-      const wet=moving&&riverBank(x,z)<.12?clamp(waterLevel(z)-y,0,1):0;
+      const wet=moving&&z>=-470&&z<=178&&riverBank(x,z)<.12?clamp(waterLevel(z)-y,0,1):0;
       uniforms.bodyWake.value.set(x,z,0,0);
       if(wet>.06){
         const vzFlow=riverSpeed(z)*.86, vxFlow=channelSlope(z)*vzFlow;

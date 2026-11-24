@@ -1,4 +1,4 @@
-import { clamp, fbm, mix, noise, smooth } from '../math.js';
+import { clamp, fbm, mix, noise, pathX, smooth } from '../noise.js';
 
 // Coordinates and heights are in metres. X increases east, Z increases south.
 export const bounds = { west: -15000, east: 15000, north: -8400, south: 9600 };
@@ -10,7 +10,7 @@ export const sites = {
   lookout: { name: 'Aussichtspunkt Falkengrat', x: 455, z: 7070, yaw: -.46 },
 };
 
-function profile(points) {
+export function profile(points) {
   const first = points[0][0], last = points.at(-1)[0];
   const tangents = points.map((point, index) => {
     const previous = points[Math.max(0, index - 1)];
@@ -48,12 +48,21 @@ export const forestRoad = profile([
   [2190, -425, 351], [2530, -785, 362], [2880, -690, 372],
   [3340, -390, 384], [3750, -315, 397], [3950, -245, 403],
 ]);
-export const hikingTrail = profile([
+const switchbacks = profile([
   [3950, -245, 403], [4310, -240, 418], [4750, -550, 427],
   [5110, -470, 431], [5300, -265, 426], [5390, -161, 430],
   [5710, 115, 454], [6110, 330, 483], [6500, 240, 510],
-  [6770, 460, 531], [7070, 455, 557],
+  [6704, 437, 534], [6780, 443, 538], [6900, 446, 544], [7070, 455, 557],
 ]);
+export const hikingTrail = {
+  ...switchbacks,
+  value(z,height=false){
+    const base=switchbacks.value(z,height);
+    if(height||z<=6580)return base;
+    const localZ=sites.lookout.z-118-z;
+    return mix(base,sites.lookout.x+pathX(-118)-pathX(localZ),smooth(6580,6770,z));
+  }
+};
 export const river = profile([
   [-8400, -14100], [-6950, -12920], [-5530, -12450], [-4760, -10900],
   [-3460, -8880], [-2900, -6900], [-2700, -5100], [-2190, -4750],
@@ -97,7 +106,8 @@ function channel(height, trace, x, z, width, level) {
   if (z < trace.first || z > trace.last) return height;
   const distance = Math.abs(x - trace.value(z));
   if (distance > width * 5 + 65) return height;
-  const bed = level - 1.4 + (distance / width) ** 2 * 1.65;
+  const edge = Math.min(1.2, distance / width);
+  const bed = level - 1.4 + edge * edge * 1.65 + Math.max(0, distance - width * 1.2) * .18;
   return mix(bed, height, smooth(width * 1.2, width * 5 + 65, distance));
 }
 

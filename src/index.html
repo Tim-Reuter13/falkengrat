@@ -5,7 +5,8 @@
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <meta name="color-scheme" content="dark">
   <meta name="description" content="Erkunde den Falkengrat, einen First-Person-Bergwald in Three.js.">
-  <title>Falkengrat</title>
+  <title>Falkengrat · Oldhoffen</title>
+  <link rel="icon" href="data:,">
   <style>/* GAME_STYLES */</style>
 </head>
 <body>
@@ -22,6 +23,7 @@
       <p id="subtitle" class="subtitle" aria-live="polite">Wald und Licht werden geladen.</p>
       <div class="fg-actions">
         <button id="play" class="play" disabled><span>Wird geladen</span><i aria-hidden="true"></i></button>
+        <button type="button" class="fg-options" id="open-trail-map" disabled>Wanderkarte</button>
         <button type="button" class="fg-options" id="fg-options" aria-controls="fg-settings" aria-expanded="true">
           <i class="fg-options-icon" aria-hidden="true"></i>Einstellungen
         </button>
@@ -75,6 +77,9 @@
             </select>
           </div>
           <div class="fg-setting">
+            <span>Taschenlampe</span><button id="toggle-torch" class="sound" type="button" aria-pressed="false">Aus</button>
+          </div>
+          <div class="fg-setting">
             <label for="timeofday">Tageszeit</label>
             <select id="timeofday">
               <option value="day" selected>Tag</option>
@@ -100,6 +105,8 @@
           <div><dt>Parieren</dt><dd><kbd>Rechtsklick</kbd></dd></div>
           <div><dt>Sprinten</dt><dd><kbd>Shift</kbd></dd></div>
           <div><dt>Springen</dt><dd><kbd>Leertaste</kbd></dd></div>
+          <div><dt>Wanderkarte</dt><dd><kbd>K</kbd></dd></div>
+          <div><dt>Taschenlampe</dt><dd><kbd>F</kbd></dd></div>
           <div><dt>Fotomodus</dt><dd><kbd>P</kbd></dd></div>
           <div><dt>Pause</dt><dd><kbd>Esc</kbd></dd></div>
         </dl>
@@ -129,6 +136,18 @@
     <div class="guide"><i id="guide" aria-hidden="true"></i><span id="objective"></span><button type="button" id="touch-pause" aria-label="Spiel pausieren" aria-describedby="objective"></button></div>
     <div class="reticle" aria-hidden="true"></div>
   </div>
+  <dialog id="trail-map" aria-labelledby="map-title">
+    <header><div><small>Falkengrat · 30 × 18 km</small><h2 id="map-title">Oldhoffen</h2></div>
+      <button type="button" id="trail-close">Schließen</button></header>
+    <canvas id="trail-plan" width="1000" height="600" aria-label="Routenplan mit deinem Standort"></canvas>
+    <img id="trail-art" hidden src="/* TRAIL_ART */" alt="Illustrierte Wanderkarte der Region Oldhoffen">
+    <footer><button id="trail-mode" type="button">Wanderkarte</button>
+      <details><summary>Schnellreise</summary><div>
+        <button data-destination="town">Oldhoffen</button><button data-destination="trailhead">Wanderparkplatz</button>
+        <button data-destination="lookout">Aussichtspunkt</button><button data-destination="pass">Nebelkamm</button>
+        <button data-destination="lake">Glasweiher</button>
+      </div></details></footer>
+  </dialog>
   <div id="fg-fade" aria-hidden="true"></div>
   <div id="death" class="death" role="alertdialog" aria-labelledby="death-title" hidden>
     <h2 id="death-title">Gefressen</h2>

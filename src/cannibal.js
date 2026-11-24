@@ -1,5 +1,5 @@
 import * as T from 'three';
-import { altitude, clamp, mix, random, riverBank, smooth, TAU } from './math.js';
+import { altitude, clamp, mix, random, waterAt, smooth, TAU } from './math.js';
 import { createSenses } from './cannibal/senses.js';
 import { createVoice } from './cannibal/voice.js';
 import { createBody } from './cannibal/body.js';
@@ -131,10 +131,19 @@ export function createCannibal({ scene, camera, collision, audio, trees, model, 
   const caution = () => 1 - traits.boldness;
 
   // ---------- navigation and the director
-  const nav = createNavGrid(collision);
+  const valleyNav=createNavGrid(collision), fieldNav=createNavGrid(collision,true);
+  let nav=valleyNav;
   const navStats = { plans: 0, unreached: 0, buildMs: 0 };
-  const follow = createFollower(nav, { onReplan: (why, r) => { navStats.plans++; if (!r.reached) navStats.unreached++; } });
-  setTimeout(() => nav.buildAsync().then(ms => { navStats.buildMs = +ms.toFixed(1); }), 2500);
+  const makeFollower=grid=>createFollower(grid, { onReplan: (why, r) => { navStats.plans++; if (!r.reached) navStats.unreached++; } });
+  const valleyFollow=makeFollower(valleyNav),fieldFollow=makeFollower(fieldNav);
+  let follow=valleyFollow;
+  function followPlayer(p){
+    const useValley=Math.abs(p.x)<83&&p.z>-171&&p.z<33;
+    const next=useValley?valleyNav:fieldNav;
+    const moved=next.center(p.x,p.z);
+    if(next!==nav||moved){nav=next;follow=useValley?valleyFollow:fieldFollow;follow.reset();}
+  }
+  setTimeout(() => valleyNav.buildAsync().then(ms => { navStats.buildMs = +ms.toFixed(1); }), 2500);
   const director = createDirector(rand);
 
   // ---------- what he knows of the player: only what he saw, heard or was told
@@ -261,7 +270,7 @@ export function createCannibal({ scene, camera, collision, audio, trees, model, 
     let ear = memory.playerMode === 'run' ? 45 : memory.playerMode === 'walk' ? 16 : 0;
     if (swingHeard) ear = Math.max(ear, 30);
     swingHeard = false;
-    if (riverBank(player.pos.x, player.pos.z) < 0 && memory.playerMode !== 'still') ear *= 1.5;
+    if (waterAt(player.pos.x, player.pos.z).bank < 0 && memory.playerMode !== 'still') ear *= 1.5;
     if (d < ear) learn(player.pos, d * .12, false, 'ears');
   }
 
@@ -994,7 +1003,7 @@ export function createCannibal({ scene, camera, collision, audio, trees, model, 
         // disappears only where nobody can see him.
         if (!plan || !plan.leave) {
           const away = bearingFromPlayer + (rand() - .5) * .8;
-          plan = { x: clamp(player.pos.x + Math.sin(away) * 48, -132, 132), z: clamp(player.pos.z + Math.cos(away) * 48, -222, 82), leave: true };
+          plan = { x: player.pos.x + Math.sin(away) * 48, z: player.pos.z + Math.cos(away) * 48, leave: true };
         }
         if (walkTo(plan.x, plan.z, distance < 15 ? 5 : 3.2, dt, 'flee')) plan = null;
         if (distance > 32 && !inView && visible < .2 || distance > 70) {
@@ -1046,6 +1055,7 @@ export function createCannibal({ scene, camera, collision, audio, trees, model, 
     voice.update(dt, now);
     if (!active && !(catching && !caught)) return;
     if (frozen) { root.updateMatrixWorld(true); return; }
+    followPlayer(p);
     observePlayer(dt, p);
     const night = isNight();
     nightTime = night ? nightTime + dt : 0;
@@ -1123,9 +1133,14 @@ export function createCannibal({ scene, camera, collision, audio, trees, model, 
   }
 
   // Test hooks (?dev).
-  function placeAt(x, z) { show(true); pos.set(x, altitude(x, z), z); tree = null; jump = null; plan = null; health = 2; knifeGrip.visible = true; follow.reset(); search = null; ambushing = false; learn(player.pos, 0, true, 'test'); }
+  function placeAt(x, z) { followPlayer(camera.position); show(true); pos.set(x, altitude(x, z), z); tree = null; jump = null; plan = null; health = 2; knifeGrip.visible = true; follow.reset(); search = null; ambushing = false; learn(player.pos, 0, true, 'test'); }
   return {
     update, frame, strike, take, reset, cues,
+    travel(){
+      if(state==='dead')return;
+      show(false);setState('away','fast travel');reset();tree=null;jump=null;plan=null;search=null;
+      follow.reset();belief.time=-1e9;lastSwing=false;
+    },
     get catching() { return catching; },
     // For the night sounds and the birds: where he is, and how close to the player (0..1).
     get threat() { return root.visible && state !== 'away' && state !== 'dead' ? pos : null; },

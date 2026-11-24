@@ -6,6 +6,11 @@ import {
   parcels, villageLanes,
 } from './layout.js';
 
+import { anchor, core, insideCore, regionalBed, tributary } from './geography.js';
+import { plantRoadside } from './roadside.js';
+import { createRegionalUnderstory } from './understory.js';
+import { altitude } from '../math.js';
+
 const tileSize = 256;
 const columns = Math.ceil((bounds.east - bounds.west) / tileSize);
 const rows = Math.ceil((bounds.south - bounds.north) / tileSize);
@@ -17,7 +22,7 @@ const tint = new T.Color();
 
 function terrain(x0, z0, width, depth, nx, nz, borders) {
   const positions = [], colors = [], indices = [];
-  const land = (x, z) => terrainHeight(Math.min(x, bounds.east), Math.min(z, bounds.south));
+  const land = (x, z) => regionalBed(Math.min(x, bounds.east), Math.min(z, bounds.south));
   function vertex(x, z, height) {
     const cover = noise(x * .0023, z * .0023);
     const small = noise(x * .026, z * .026 + 18);
@@ -47,6 +52,7 @@ function terrain(x0, z0, width, depth, nx, nz, borders) {
   }
   const stride = nx + 1;
   for (let j = 0; j < nz; j++) for (let i = 0; i < nx; i++) {
+    if(width>tileSize && insideCore(x0+(i+.5)*width/nx,z0+(j+.5)*depth/nz))continue;
     const a = j * stride + i;
     indices.push(a, a + stride, a + 1, a + 1, a + stride, a + stride + 1);
   }
@@ -59,28 +65,7 @@ function terrain(x0, z0, width, depth, nx, nz, borders) {
   return geo;
 }
 
-function coneGeometry() {
-  const vertices = [], indices = [];
-  const levels = [[0, .13], [.28, .23], [.32, .20], [.52, .17], [.55, .14], [.76, .10], [1, .003]];
-  const sides = 6;
-  for (const [height, radius] of levels) {
-    for (let j = 0; j < sides; j++) {
-      const angle = j / sides * Math.PI * 2;
-      vertices.push(Math.cos(angle) * radius, height, Math.sin(angle) * radius);
-    }
-  }
-  for (let ring = 0; ring < levels.length - 1; ring++) for (let k = 0; k < sides; k++) {
-    const a = ring * sides + k, b = ring * sides + (k + 1) % sides;
-    indices.push(a, a + sides, b, b, a + sides, b + sides);
-  }
-  const geo = new T.BufferGeometry();
-  geo.setAttribute('position', new T.Float32BufferAttribute(vertices, 3));
-  geo.setIndex(indices);
-  geo.computeVertexNormals();
-  return geo;
-}
-
-function streamTiles(scene) {
+function streamTiles(scene, forest, woodland, textures) {
   const flags = new Uint8Array(columns * rows);
   const mask = new T.DataTexture(flags, columns, rows, T.RedFormat);
   mask.needsUpdate = true;
@@ -98,54 +83,53 @@ function streamTiles(scene) {
   const distant = new T.Mesh(terrain(bounds.west, bounds.north, columns * tileSize, rows * tileSize,
     columns, rows), low);
   scene.add(distant);
-  const near = new T.MeshLambertMaterial({ vertexColors: true });
-  const cone = coneGeometry();
-  const timber = new T.MeshLambertMaterial({ color: 0xffffff });
-  const matrix = new T.Object3D();
+  const near = new T.MeshStandardMaterial({roughness:.98,vertexColors:true});
+  near.onBeforeCompile=shader=>{
+    shader.uniforms.needles={value:textures.needles}; shader.uniforms.meadow={value:textures.meadow};
+    shader.uniforms.granite={value:textures.granite}; shader.uniforms.groundRelief={value:textures.groundNormal};
+    shader.vertexShader='varying vec3 landPos;\n'+shader.vertexShader.replace('#include <begin_vertex>',
+      '#include <begin_vertex>\nlandPos=position;');
+    shader.fragmentShader='varying vec3 landPos; uniform sampler2D needles,meadow,granite,groundRelief;\n'+shader.fragmentShader;
+    shader.fragmentShader=shader.fragmentShader.replace('#include <color_fragment>', `
+      vec2 p=landPos.xz;
+      vec2 bend=.38*vec2(sin(p.y*.051)+cos(p.x*.084),cos(p.y*.076)+sin(p.x*.048));
+      vec2 uv=p*.34+bend, uv2=mat2(.8,-.6,.6,.8)*p*.23-bend;
+      float patchMix=.5+.25*sin(p.x*.049+p.y*.015)+.25*cos(p.y*.062-p.x*.021);
+      vec3 litter=mix(texture2D(needles,uv).rgb,texture2D(needles,uv2).rgb,patchMix);
+      vec3 grass=mix(texture2D(meadow,uv).rgb,texture2D(meadow,uv2).rgb,1.-patchMix);
+      float grassland=smoothstep(.042,.114,vColor.g);
+      float cliff=smoothstep(775.,1020.,landPos.y+patchMix*78.);
+      vec3 surface=mix(mix(litter,grass,.22+.70*grassland),texture2D(granite,uv*.41).rgb,cliff);
+      diffuseColor.rgb*=surface*(.76+.40*patchMix);
+    `).replace('#include <normal_fragment_maps>',`
+      vec2 grad=texture2D(groundRelief,landPos.xz*.51).rg*2.-1.;
+      vec3 t=normalize(mat3(viewMatrix)*vec3(-1.,0.,0.));
+      vec3 b=normalize(mat3(viewMatrix)*vec3(0.,0.,-1.));
+      normal=normalize(normal+.17*(t*grad.x+b*grad.y));
+    `);
+  };
   const tiles = new Map();
   let queue = [], centerX = -1, centerZ = -1;
 
-  const divisions = detail => [12, 24, 48][detail];
+  const divisions = detail => [16, 32, 64][detail];
 
   function load({ i, j, detail, key, borders, signature }) {
     const x0 = bounds.west + i * tileSize, z0 = bounds.north + j * tileSize;
     const width = tileSize, depth = tileSize;
     const size = divisions(detail);
-    const ground = new T.Mesh(terrain(x0, z0, width, depth, size, size, borders), near);
-    const count = detail === 2 ? 118 : detail === 1 ? 92 : 56;
-    const trees = new T.InstancedMesh(cone, timber, count);
-    const rand = random(9307 + i * 48331 + j * 941123);
-    const treeTint = new T.Color();
-    let planted = 0;
-    for (let n = 0; n < count; n++) {
-      const x = x0 + rand() * width, z = z0 + rand() * depth;
-      const chance = rand(), scale = rand(), rotation = rand();
-      const y = terrainHeight(x, z);
-      if (x > bounds.east || z > bounds.south || openLand(x, z) ||
-        y > 960 - chance * 55 || chance < noise(x * .006, z * .006) * .28) continue;
-      const h = 6 + scale * 15;
-      matrix.position.set(x, y - .12, z);
-      matrix.rotation.set(0, rotation * Math.PI * 2, 0);
-      matrix.scale.set(h * .83, h, h * .83);
-      matrix.updateMatrix();
-      trees.setMatrixAt(planted, matrix.matrix);
-      trees.setColorAt(planted++, treeTint.setHex(0x31483b).lerp(shadeColor, scale * .73));
-    }
-    trees.count = planted;
-    if (planted) trees.computeBoundingSphere();
-    const old = tiles.get(key);
-    if (old) remove(old);
-    scene.add(ground);
-    if (planted) scene.add(trees);
+    const old=tiles.get(key);
+    if(old?.ground){scene.remove(old.ground);old.ground.geometry.dispose();}
+    const ground=insideCore(x0+width/2,z0+depth/2)?null:new T.Mesh(terrain(x0,z0,width,depth,size,size,borders),near);
+    if(ground){ground.receiveShadow=true;scene.add(ground);}
+    const release=old?.release??forest.addStand(woodland.tile(x0,z0));
     flags[key] = 255;
     mask.needsUpdate = true;
-    tiles.set(key, { ground, trees, signature });
+    tiles.set(key, { ground, release, signature });
   }
 
   function remove(tile) {
-    scene.remove(tile.ground, tile.trees);
-    tile.ground.geometry.dispose();
-    tile.trees.dispose();
+    if(tile.ground){scene.remove(tile.ground);tile.ground.geometry.dispose();}
+    tile.release();
   }
 
   function update(x, z, initial = false) {
@@ -172,6 +156,8 @@ function streamTiles(scene) {
         patch.borders = [[col, row - 1], [col + 1, row], [col, row + 1], [col - 1, row]]
           .map(([nx, nz]) => {
             if (nx < 0 || nx >= columns || nz < 0 || nz >= rows) return divisions(detail);
+            const ax=bounds.west+nx*tileSize+128,az=bounds.north+nz*tileSize+128;
+            if(insideCore(ax,az))return 16;
             const neighbor = next.get(nz * columns + nx);
             return neighbor ? divisions(Math.min(detail, neighbor.detail)) : 1;
           });
@@ -182,7 +168,7 @@ function streamTiles(scene) {
     }
     const start = performance.now();
     let changes = 0;
-    while (queue.length && changes < (initial ? 9 : 2) &&
+    while (queue.length && changes < (initial ? 1 : 2) &&
       (changes === 0 || initial || performance.now() - start < 3.5)) {
       load(queue.shift());
       changes++;
@@ -210,7 +196,47 @@ function batch(scene, color, options = {}) {
       geo.setIndex(indices);
       geo.computeVertexNormals();
       geo.computeBoundingSphere();
-      scene.add(new T.Mesh(geo, new T.MeshLambertMaterial({ color, side: T.DoubleSide, ...options })));
+      const material=new T.MeshStandardMaterial({color,side:T.DoubleSide,roughness:options.water?.28:.96});
+      material.onBeforeCompile=shader=>{
+        shader.vertexShader='varying vec3 routePoint;\n'+shader.vertexShader.replace('#include <begin_vertex>',
+          '#include <begin_vertex>\nroutePoint=position;');
+        shader.fragmentShader='varying vec3 routePoint;\n'+shader.fragmentShader;
+        if(options.water){
+          shader.uniforms.flowTime=scene.userData.clock;
+          shader.fragmentShader='uniform float flowTime;\n'+shader.fragmentShader;
+          shader.fragmentShader=shader.fragmentShader.replace('#include <normal_fragment_maps>',`
+            vec2 uv=routePoint.xz;
+            float a=sin(dot(uv,vec2(2.6,.8))+flowTime*1.5+sin(uv.y*.61));
+            float b=sin(dot(uv,vec2(-1.7,3.3))-flowTime*1.8);
+            normal=normalize(normal+mat3(viewMatrix)*vec3(a*.071,0.,b*.059));
+            diffuseColor.rgb*=.78+.22*pow(1.-abs(dot(normal,normalize(vViewPosition))),3.);
+          `);
+        }else{
+          shader.fragmentShader=shader.fragmentShader.replace('#include <color_fragment>',`
+            vec2 p=routePoint.xz;
+            vec2 cell=floor(p*47.);
+            float grit=fract(sin(dot(mod(cell,512.),vec2(17.13,43.71)))*3274.23);
+            float detail=1.-smoothstep(.012,.07,max(fwidth(p.x),fwidth(p.y)));
+            diffuseColor.rgb*=(.94+.05*sin(p.x*.37+sin(p.y*.28)))*mix(1.,.71+.58*grit,detail);
+          `);
+        }
+      };
+      if(options.aggregate){
+        const compile=material.onBeforeCompile;
+        material.onBeforeCompile=shader=>{
+          compile(shader);shader.uniforms.aggregate={value:options.aggregate};
+          shader.fragmentShader='uniform sampler2D aggregate;\n'+shader.fragmentShader.replace('#include <roughnessmap_fragment>',`
+            #include <roughnessmap_fragment>
+            vec2 st=routePoint.xz;
+            vec3 a=texture2D(aggregate,st*.92).rgb;
+            vec3 b=texture2D(aggregate,mat2(.8,.6,-.6,.8)*st*.43).rgb;
+            float grains=clamp(dot(mix(a,b,.42),vec3(.21,.72,.07))*2.9,.35,1.3);
+            diffuseColor.rgb*=.64+.48*grains;
+          `);
+        };
+      }
+      material.customProgramCacheKey=()=>options.aggregate?'aggregate':options.water?'region-water':'region-road';
+      const mesh=new T.Mesh(geo,material);mesh.receiveShadow=true;scene.add(mesh);
     },
   };
 }
@@ -232,19 +258,30 @@ function ribbon(layer, trace, xAxis, width, height, step, first = trace.first, l
   }
 }
 
-function drawRoutes(scene) {
-  const asphalt = batch(scene, 0x3d4242);
-  const gravel = batch(scene, 0x747060);
-  const trail = batch(scene, 0x897757);
+function drawRoutes(scene,textures) {
+  const asphalt = batch(scene, 0x4c5050, { aggregate:textures.granite });
+  const gravel = batch(scene, 0x918774, { aggregate:textures.earth });
+  const trail = batch(scene, 0x9a8768, { aggregate:textures.needles });
   const paint = batch(scene, 0xdbd9c6);
-  const water = batch(scene, 0x486570, { emissive: 0x15282b, emissiveIntensity: .35 });
+  const water = batch(scene, 0x677e77, { water: true });
   const bridge = batch(scene, 0x746e5a);
   const paved = x => mainRoad.value(x, true) + .17;
   const secondary = z => forestRoad.value(z, true) + .15;
   const pathHeight = z => hikingTrail.value(z, true) + .13;
+  ribbon(gravel,mainRoad,true,roadHalfWidth*2+2.1,x=>paved(x)-.045,12);
   ribbon(asphalt, mainRoad, true, roadHalfWidth * 2, paved, 12);
   ribbon(gravel, forestRoad, false, 5.2, secondary, 8);
-  ribbon(trail, hikingTrail, false, 2.45, pathHeight, 4);
+  // The final approach follows the original forest floor into its painted footpath.
+  const approachEnd=anchor.z-87;
+  const trailY=z=>z<core.north?pathHeight(z):altitude(anchor.x-hikingTrail.value(z),anchor.z-z)+anchor.y+.055;
+  ribbon(trail,hikingTrail,false,2.45,trailY,2,hikingTrail.first,approachEnd);
+  const tributaryStrip=(start,end)=>{for(let z=start;z<end;z+=2){
+    const next=Math.min(end,z+2);
+    const edge=t=>[-1,1].map(sign=>[tributary.value(t)+sign*tributary.width(t),tributary.level(t)+.015,t]);
+    water.quad(...edge(z),...edge(next));
+  }};
+  tributaryStrip(tributary.first,tributary.join);
+  tributaryStrip(tributary.source,tributary.last);
   ribbon(water, river, false, 24, z => riverHeight(z) + .015, 11);
   ribbon(water, creek, false, 6.9, z => creekHeight(z) + .02, 8);
   ribbon(water, lakeOutflow, false, 7.5, z => outflowHeight(z) + .025, 9);
@@ -329,9 +366,24 @@ function drawVillage(scene) {
   roof.setIndex([0, 2, 1, 3, 4, 5, 0, 3, 5, 0, 5, 2, 2, 5, 4, 2, 4, 1]);
   roof.computeVertexNormals();
   const base = new T.MeshLambertMaterial({ color: 0xffffff, flatShading: true });
-  const walls = new T.InstancedMesh(shell, base, buildings.length);
+  const siding=new T.MeshStandardMaterial({roughness:.94});
+  siding.onBeforeCompile=shader=>{
+    shader.vertexShader='varying vec3 boards;\n'+shader.vertexShader.replace('#include <begin_vertex>',
+      '#include <begin_vertex>\nboards=(instanceMatrix*vec4(position,1.)).xyz;');
+    shader.fragmentShader='varying vec3 boards;\n'+shader.fragmentShader.replace('#include <color_fragment>',`
+      #include <color_fragment>
+      float v=boards.y*5.8;
+      float fade=1.-smoothstep(.12,.9,fwidth(v));
+      float seam=smoothstep(.015,.10,fract(v));
+      float wood=.95+.05*sin((boards.x+boards.z)*2.2+floor(v)*3.6);
+      diffuseColor.rgb*=mix(1.,(.65+.35*seam)*wood,fade);
+    `);
+  };
+  const walls = new T.InstancedMesh(shell, siding, buildings.length);
   const roofs = new T.InstancedMesh(roof, base, buildings.length);
   const details = new T.InstancedMesh(shell, base, buildings.length * 4);
+  const trim=new T.InstancedMesh(shell,base,buildings.length*24);
+  let parts=0;
   const instance = new T.Object3D();
   const color = new T.Color();
   const palette = [0x807764, 0xa29680, 0x6a6b63, 0x74614d, 0x9b9280, 0x8c8270];
@@ -356,17 +408,28 @@ function drawVillage(scene) {
       put(details, id * 4 + (side < 0 ? 2 : 3), x + w * .29 * side, y + 2.05,
         z + front * (d / 2 + .03), 1.22, 1.05, .09, 0x526265);
     }
+    const face=z+front*(d*.5+.12);
+    put(trim,parts++,x,y+.18,z,w+.16,.45,d+.16,0x66675f);
+    put(trim,parts++,x,y+.32,face+front*.7,2.85,.54,1.6,0x756b58);
+    put(trim,parts++,x,y+.14,face+front*1.62,1.56,.27,.46,0x817b69);
+    put(trim,parts++,x,y+2.85,face+front*.74,3.15,.2,1.8,0x51483c);
+    for(const side of [-1,1]){
+      put(trim,parts++,x+side*1.28,y+1.58,face+front*1.44,.14,2.52,.14,0x63594b);
+      const wx=x+w*.29*side;
+      for(const offset of [-.62,.62])put(trim,parts++,wx+offset,y+2.05,face,.09,1.22,.12,0xaca38d);
+      for(const dy of [-.55,.55])put(trim,parts++,wx,y+2.05+dy,face,1.34,.115,.16,0xa99e89);
+      put(trim,parts++,wx,y+2.05,face,.055,1.07,.10,0x948a76);
+      put(trim,parts++,x+side*(w*.5+.025),y+2.0,z,.09,1.20,1.32,0x455759);
+    }
     return { x, z, w, d };
   });
-  scene.add(walls, roofs, details);
+  trim.count=parts;
+  for(const mesh of [walls,roofs,details,trim]){mesh.castShadow=true;mesh.receiveShadow=true;mesh.layers.enable(3);scene.add(mesh);}
 
   const lot = batch(scene, 0x77705e);
   const lotY = forestRoad.value(forestRoad.last, true) + .13;
   lot.quad([-262, lotY, 3936], [-228, lotY, 3936], [-262, lotY, 3962], [-228, lotY, 3962]);
   lot.add();
-  const deck = new T.Mesh(new T.BoxGeometry(10, .45, 5.8), new T.MeshLambertMaterial({ color: 0x736554 }));
-  deck.position.set(sites.lookout.x, terrainHeight(sites.lookout.x, sites.lookout.z) + .14, sites.lookout.z);
-  scene.add(deck);
   return solids;
 }
 
@@ -393,52 +456,25 @@ function sign(scene, text, x, z, yaw, accent = false) {
   scene.add(pole, board);
 }
 
-function makeSky(haze) {
-  const sky = new T.Mesh(new T.SphereGeometry(9850, 24, 12), new T.ShaderMaterial({
-    side: T.BackSide, depthWrite: false, depthTest: false,
-    uniforms: { horizon: { value: new T.Color(haze) }, zenith: { value: new T.Color(0x465f71) } },
-    vertexShader: `
-      varying vec3 skyDirection;
-      void main() {
-        skyDirection = position;
-        gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.);
-      }`,
-    fragmentShader: `
-      varying vec3 skyDirection;
-      uniform vec3 horizon, zenith;
-      void main() {
-        vec3 direction = normalize(skyDirection);
-        float height = smoothstep(-.012, .69, direction.y);
-        vec2 cloud = direction.xz / (max(0., direction.y) + .43);
-        float wisps = sin(cloud.x * 6. + cloud.y * 4. + sin(cloud.y * 4.1)) * .45
-          + sin(cloud.x * 13. - cloud.y * 9.5) * .23;
-        vec3 color = mix(horizon, zenith, height);
-        color += horizon * smoothstep(.02, .55, wisps) * height * .32;
-        gl_FragColor = vec4(color, 1.);
-        #include <tonemapping_fragment>
-        #include <colorspace_fragment>
-      }`,
-  }));
-  sky.renderOrder = -10;
-  return sky;
-}
-
-export function createRegionScene(scene) {
-  const haze = 0x899b9e;
-  scene.background = new T.Color(haze);
-  scene.fog = new T.FogExp2(haze, .00051);
-  const sky = makeSky(haze);
-  scene.add(sky);
-  scene.add(new T.HemisphereLight(0xc5d5d9, 0x434a3c, 1.95));
-  const sun = new T.DirectionalLight(0xe4e2d3, 1.35);
-  sun.position.set(-5, 8, 2);
-  scene.add(sun);
-  const stream = streamTiles(scene);
-  drawRoutes(scene);
-  const solids = drawVillage(scene);
-  sign(scene, 'Oldhoffen', -99, 7, -Math.PI / 2, true);
-  sign(scene, 'Wanderparkplatz →', -13, -7, -Math.PI / 2);
-  sign(scene, 'Wanderweg Falkengrat', -248, 3956, Math.PI);
-  sign(scene, 'Aussichtspunkt Falkengrat', 459, 7074, 0);
-  return { ...stream, solids, sky };
+export function createOpenRegion(scene,forest,woodland,textures,clock,collision){
+  const group=new T.Group();
+  group.position.set(anchor.x,-anchor.y,anchor.z);
+  group.rotation.y=Math.PI;
+  group.userData.clock=clock;
+  scene.add(group);
+  const stream=streamTiles(group,forest,woodland,textures);
+  drawRoutes(group,textures);
+  plantRoadside(group,textures,collision);
+  const understory=createRegionalUnderstory(scene,textures);
+  const solids=drawVillage(group);
+  const shape=new T.BoxGeometry(1,1,1), dummy=new T.Object3D();
+  for(const {x,z,w,d} of solids){
+    const gx=anchor.x-x,gz=anchor.z-z, y=terrainHeight(x,z)-anchor.y;
+    dummy.position.set(gx,y+2.0,gz);dummy.scale.set(w,4.5,d);dummy.updateMatrix();
+    collision.addMesh(gx,gz,shape,dummy.matrix,'house');
+  }
+  sign(group,'Oldhoffen',-99,7,-Math.PI/2,true);
+  sign(group,'Wanderparkplatz →',-13,-7,-Math.PI/2);
+  sign(group,'Wanderweg Falkengrat',-248,3956,Math.PI);
+  return {update(x,z){stream.update(anchor.x-x,anchor.z-z);understory(x,z);},stats:stream.stats};
 }
